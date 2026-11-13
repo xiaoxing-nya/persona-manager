@@ -1,0 +1,12 @@
+# Keep source and documentation line endings stable on every platform.
+* text=auto eol=lf
+
+# Binary artwork and packaged assets must not be normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.tgz binary

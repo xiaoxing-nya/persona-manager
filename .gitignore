@@ -1,0 +1,33 @@
+# Dependency and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.tgz
+
+# Local harness state and private persona data
+.dsh/
+.local/
+personas/
+.applied.json
+settings.json
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+
+# Temporary files, logs, and editor state
+*.log
+*.tmp
+*.tmp-*
+*.tmp.*
+*.bak
+*~
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
