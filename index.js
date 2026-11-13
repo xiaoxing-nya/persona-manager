@@ -114,6 +114,18 @@ function asRequest(request) {
   return request !== null && typeof request === 'object' ? request : {}
 }
 
+/** Accept a pasted path, including one matching pair of outer copy-as-path quotes. */
+function normalizeImportPath(value) {
+  if (typeof value !== 'string') throw new PersonaError('invalid-path', 'path is required')
+  let path = value.trim()
+  const quote = path[0]
+  if (path.length >= 2 && (quote === '"' || quote === "'") && path.endsWith(quote)) {
+    path = path.slice(1, -1).trim()
+  }
+  if (path === '') throw new PersonaError('invalid-path', 'path is required')
+  return path
+}
+
 /**
  * Derive a file id from a display name: drop path separators and Windows
  * reserved characters, turn whitespace runs into `-`, and keep Unicode.
@@ -697,10 +709,10 @@ class PersonaService {
 
   /** Admit model imports only within the session workspace or persona directory. */
   async authorizeModelImport(rawPath, agent) {
-    if (typeof rawPath !== 'string' || rawPath.trim() === '') throw new PersonaError('invalid-path', 'an import path is required')
+    const path = normalizeImportPath(rawPath)
     const root = this.deps.getImportRoot?.(agent)
     if (typeof root !== 'string' || root === '') throw new PersonaError('import-access', 'model imports require a session workspace; use the settings page to import external persona files')
-    const source = resolve(root, rawPath.trim())
+    const source = resolve(root, path)
     const allowed = [resolve(root), this.deps.personaDir].filter(Boolean)
     if (!allowed.some(dir => withinDirectory(source, dir))) throw new PersonaError('import-access', 'the import is outside the session workspace; use the settings page for external sources')
     const canonical = await realpath(source)
@@ -841,9 +853,7 @@ class PersonaService {
   async import(request) {
     return this._guard('import', () => this._serialize(async () => {
       const req = asRequest(request)
-      const rawPath = typeof req.path === 'string' ? req.path.trim() : ''
-      if (rawPath === '') throw new PersonaError('invalid-path', 'path is required')
-      const target = resolve(rawPath)
+      const target = resolve(normalizeImportPath(req.path))
       let info
       try {
         info = await stat(target)

@@ -132,3 +132,55 @@ test('USER.md has localized profile controls and new AI drafts carry their categ
   assert.match(source, /draft\.slot === 'user' \? 'editor\.userBody' : 'editor\.body'/)
   client.dispose()
 })
+
+
+test('multi-selection has localized select-all and batch actions with deletion confirmation', async () => {
+  const client = makeClient()
+  await client.plugin.apply(client.ctx)
+  const dictionaries = client.locales.get('xiaoxing-persona')
+  for (const language of ['en', 'zh']) {
+    for (const key of ['list.select', 'list.selectAll', 'bulk.selected', 'bulk.clear', 'bulk.enable', 'bulk.disable', 'bulk.delete', 'bulk.enabled', 'bulk.disabled', 'bulk.deleted', 'bulk.failed', 'bulk.deleteConfirm']) {
+      assert.equal(typeof dictionaries[language][key], 'string', `${language}:${key}`)
+    }
+  }
+  assert.match(source, /checked: selectedIds\.includes\(file\.id\)/)
+  assert.match(source, /pruneSelection\(current, nextFiles\)/)
+  assert.match(source, /method === 'delete' && !confirmAction\(t\('bulk\.deleteConfirm'/)
+  assert.match(source, /runSelected\('toggle', \{ enabled: true \}\)/)
+  assert.match(source, /runSelected\('toggle', \{ enabled: false \}\)/)
+  assert.match(source, /runSelected\('delete'\)/)
+  assert.match(source, /setSelectedIds\(failures\.map/)
+  assert.equal(client.descriptors.descriptors.length, 11, 'batch actions reuse existing Host endpoints')
+  client.dispose()
+})
+
+test('pure selection and batch helpers prune stale IDs and preserve individual failures', async () => {
+  // Evaluate only data helpers, not React, a page, or a DOM.
+  const pruneSource = source.match(/    function pruneSelection\([^]*?\n    \}/)?.[0]
+  const batchSource = source.match(/    async function callForFiles\([^]*?\n    \}/)?.[0]
+  assert(pruneSource && batchSource)
+  const prune = vm.runInNewContext(`(${pruneSource.trim()})`)
+  const batch = vm.runInNewContext(`(${batchSource.trim()})`)
+  assert.deepEqual(Array.from(prune(['a', 'stale', 'b'], [{ id: 'b' }, { id: 'a' }])), ['a', 'b'])
+  const calls = []
+  let inFlight = 0
+  const outcomes = await batch([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }], 'toggle', { enabled: true, id: 'must-not-override' }, async (method, request) => {
+    assert.equal(++inFlight, 1, 'Host calls are sequential')
+    calls.push({ method, id: request.id, enabled: request.enabled })
+    await Promise.resolve()
+    inFlight -= 1
+    return request.id === 'b' ? { ok: false, code: 'not-found', message: 'missing B' } : { ok: true }
+  })
+  assert.deepEqual(calls.map(item => item.id), ['a', 'b', 'c'])
+  assert(calls.every(item => item.method === 'toggle' && item.enabled === true))
+  assert.deepEqual(Array.from(outcomes, item => item.result.ok), [true, false, true])
+  assert.equal(outcomes[1].result.code, 'not-found')
+  const thrown = await batch([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], 'delete', {}, async (_method, request) => {
+    if (request.id === 'a') throw new Error('simulated disconnect')
+    return { ok: true }
+  })
+  assert.equal(thrown[0].result.ok, false)
+  assert.equal(thrown[0].result.code, 'internal')
+  assert.match(thrown[0].result.message, /simulated disconnect/)
+  assert.equal(thrown[1].result.ok, true)
+})

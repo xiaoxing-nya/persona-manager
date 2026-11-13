@@ -1,6 +1,6 @@
 /** Load the actual unpacked distribution and verify first-run behavior there. */
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -48,13 +48,19 @@ try {
   assert.match(await readFile(join(dir, 'user-check.md'), 'utf8'), /^slot: user$/m)
   assert((await service.compose({})).text.includes('Provided preference: concise answers.'))
   assert.equal((await service.remove({ id: 'user-check' })).ok, true)
+  const quotedSource = join(temp, 'quoted source.md')
+  await writeFile(quotedSource, 'Example quoted import.\n')
+  const imported = await service.import({ path: `"${quotedSource}"` })
+  assert.equal(imported.ok, true, JSON.stringify(imported))
+  assert.equal((await service.remove({ id: imported.created[0].id })).ok, true)
+  assert.equal((await service.import({ path: '""' })).code, 'invalid-path')
   const removed = await service.remove({ id: 'basic' })
   assert.equal(removed.ok, true)
   await service.disposePresets()
   const recovered = load()
   await recovered.initialize()
   assert(!(await readdir(dir)).includes('basic.md'), 'A deleted starter must not return after reload')
-  console.log('Unpacked distribution: module load, packaged starter, user and personality tool/write/compose, no auto-apply, reload idempotency: OK')
+  console.log('Unpacked distribution: module load, packaged starter, quoted import, user and personality tool/write/compose, no auto-apply, reload idempotency: OK')
 } finally {
   for (const cleanup of cleanups.reverse()) await cleanup()
   assert(resolve(temp).startsWith(resolve(tmpdir()) + sep))

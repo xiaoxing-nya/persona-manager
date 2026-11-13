@@ -123,6 +123,51 @@ test('model import allows its workspace and refuses an external source; UI impor
   success(await f.service.import({ path: join(f.outside, 'external.md') }))
 })
 
+test('pasted quoted absolute directory and file paths preserve spaces and embedded apostrophes', async t => {
+  const f = await fixture(t)
+  const input = join(f.workspace, "Alice's persona")
+  await mkdir(input)
+  const source = join(input, 'SOUL.md')
+  await writeFile(source, 'Example supplied persona.\n')
+  const directory = success(await f.service.import({ path: `  "${input}"  ` }))
+  assert.equal(directory.created.length, 1)
+  const imported = success(await f.service.read({ id: directory.created[0].id })).file
+  assert.equal(imported.sourceFile, source)
+  assert.equal(imported.body.trim(), 'Example supplied persona.')
+  const file = success(await f.service.import({ path: `'${source}'` }))
+  assert.equal(file.created.length, 1)
+  assert.equal(success(await f.service.read({ id: file.created[0].id })).file.sourceFile, source)
+})
+
+test('quoted model paths work in the workspace and cannot bypass external-path restrictions', async t => {
+  const f = await fixture(t)
+  const source = join(f.workspace, 'quoted file.md')
+  await writeFile(source, '# Supplied persona\nExample content.\n')
+  await writeFile(join(f.outside, 'external.md'), 'Must remain outside the model import scope.\n')
+  const relative = await f.tool.execute({ action: 'import', path: '"quoted file.md"' }, { agent: f.agent })
+  assert.equal(relative.ok, true, relative.summary)
+  const absolute = await f.tool.execute({ action: 'import', path: `'${source}'` }, { agent: f.agent })
+  assert.equal(absolute.ok, true, absolute.summary)
+  const external = await f.tool.execute({ action: 'import', path: `"${join(f.outside, 'external.md')}"` }, { agent: f.agent })
+  assert.equal(external.ok, false)
+  assert.match(external.summary, /import-access/)
+  const traversal = await f.tool.execute({ action: 'import', path: `'${join('..', 'outside', 'external.md')}'` }, { agent: f.agent })
+  assert.equal(traversal.ok, false)
+  assert.match(traversal.summary, /import-access/)
+})
+
+test('empty or quote-only imports are rejected before accessing a source or creating data', async t => {
+  const f = await fixture(t)
+  const before = (await readdir(f.data)).sort()
+  for (const path of ['', '  ', '""', "''", '"   "', "'   '"]) {
+    assert.equal((await f.service.import({ path })).code, 'invalid-path')
+    const model = await f.tool.execute({ action: 'import', path }, { agent: f.agent })
+    assert.equal(model.ok, false)
+    assert.match(model.summary, /invalid-path/)
+  }
+  assert.deepEqual((await readdir(f.data)).sort(), before)
+})
+
 test('hidden files and private harness state are not accepted as persona imports', async t => {
   const f = await fixture(t)
   await writeFile(join(f.workspace, '.credentials.yaml'), 'agent:\n  personalities:\n    hidden: "Must not import"\n')

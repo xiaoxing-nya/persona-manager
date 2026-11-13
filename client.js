@@ -24,6 +24,24 @@ window.__ModuleLoader__.load({
     /** Persona slots in composition order. */
     const SLOTS = ['identity', 'voice', 'user', 'instructions', 'personality']
 
+    /** Keep only selections that still exist in the refreshed list. */
+    function pruneSelection(ids, files) {
+      const available = new Set(files.map(file => file.id))
+      return ids.filter(id => available.has(id))
+    }
+
+    /** Call existing Host operations sequentially and retain each result. */
+    async function callForFiles(files, method, fields, call) {
+      const outcomes = []
+      for (const file of files) {
+        let result
+        try { result = await call(method, { ...fields, id: file.id }) }
+        catch (error) { result = { ok: false, code: 'internal', message: error instanceof Error ? error.message : String(error) } }
+        outcomes.push({ id: file.id, name: file.name, result })
+      }
+      return outcomes
+    }
+
     /** English dictionary (sentence case). */
     const EN = {
       'title': 'Xiaoxing persona manager',
@@ -46,6 +64,18 @@ window.__ModuleLoader__.load({
       'apply.emptyConfirm': 'No enabled persona has text. Applying now clears the persona that is currently in effect. Continue?',
       'list.title': 'Persona files',
       'list.empty': 'No persona files yet. Create one or import an existing persona.',
+      'list.select': 'Select {name}',
+      'list.selectAll': 'Select all',
+      'bulk.selected': '{count} selected',
+      'bulk.clear': 'Clear selection',
+      'bulk.enable': 'Enable selected',
+      'bulk.disable': 'Disable selected',
+      'bulk.delete': 'Delete selected',
+      'bulk.enabled': 'Enabled {count} files.',
+      'bulk.disabled': 'Disabled {count} files.',
+      'bulk.deleted': 'Deleted {count} files.',
+      'bulk.failed': '{count} files failed:',
+      'bulk.deleteConfirm': 'Delete {count} selected files from disk?\n{names}',
       'list.toggle': 'Toggle {name}',
       'list.edit': 'Edit',
       'list.remove': 'Delete',
@@ -174,6 +204,18 @@ window.__ModuleLoader__.load({
       'apply.emptyConfirm': '没有任何启用的人格包含正文。继续应用会清空当前生效的人格。要继续吗？',
       'list.title': '人格文件',
       'list.empty': '还没有人格文件。新建一个，或导入现成的人格设定。',
+      'list.select': '选择 {name}',
+      'list.selectAll': '全选',
+      'bulk.selected': '已选 {count} 项',
+      'bulk.clear': '取消选择',
+      'bulk.enable': '启用所选',
+      'bulk.disable': '停用所选',
+      'bulk.delete': '删除所选',
+      'bulk.enabled': '已启用 {count} 个文件。',
+      'bulk.disabled': '已停用 {count} 个文件。',
+      'bulk.deleted': '已删除 {count} 个文件。',
+      'bulk.failed': '{count} 个文件操作失败：',
+      'bulk.deleteConfirm': '删除选中的 {count} 个文件？文件将从磁盘移除。\n{names}',
       'list.toggle': '切换 {name}',
       'list.edit': '编辑',
       'list.remove': '删除',
@@ -369,6 +411,7 @@ window.__ModuleLoader__.load({
       return function PersonaSection(props) {
         const t = typeof props.t === 'function' ? props.t : fallbackT
         const [files, setFiles] = React.useState([])
+        const [selectedIds, setSelectedIds] = React.useState([])
         const [listFailure, setListFailure] = React.useState(null)
         const refreshGeneration = React.useRef(0)
         const [status, setStatus] = React.useState(null)
@@ -417,7 +460,11 @@ window.__ModuleLoader__.load({
           const generation = ++refreshGeneration.current
           const [listResult, statusResult] = await Promise.all([call('list', {}), call('status', {})])
           if (generation !== refreshGeneration.current) return
-          if (listResult.ok) setFiles(Array.isArray(listResult.value?.files) ? listResult.value.files : [])
+          if (listResult.ok) {
+            const nextFiles = Array.isArray(listResult.value?.files) ? listResult.value.files : []
+            setFiles(nextFiles)
+            setSelectedIds(current => pruneSelection(current, nextFiles))
+          }
           setListFailure(listResult.ok ? null : listResult)
           setStatus(statusResult.ok ? (statusResult.value ?? null) : null)
           const problem = !listResult.ok ? listResult : !statusResult.ok ? statusResult : null
@@ -506,6 +553,45 @@ window.__ModuleLoader__.load({
           const result = await call('toggle', { id: file.id, enabled: file.enabled !== true })
           if (!result.ok) setFailure(result)
           await refresh({ preserveFailure: !result.ok })
+        }
+
+        const toggleSelection = (id, checked) => {
+          setSelectedIds(current => checked ? (current.includes(id) ? current : [...current, id]) : current.filter(value => value !== id))
+        }
+
+        /** Selection is local UI state; data changes use the same Host methods as row actions. */
+        const runSelected = async (method, fields = {}) => {
+          if (busy || aiBusy || listFailure !== null) return
+          const selection = files.filter(file => selectedIds.includes(file.id))
+          if (selection.length === 0) return
+          if (method === 'delete' && !confirmAction(t('bulk.deleteConfirm', { count: selection.length, names: selection.map(file => file.name).join('\n') }))) return
+          setBusy(true)
+          setFailure(null)
+          setNotice('')
+          let failed = true
+          try {
+            const outcomes = await callForFiles(selection, method, fields, call)
+            const succeeded = outcomes.filter(item => item.result?.ok === true)
+            const failures = outcomes.filter(item => item.result?.ok !== true)
+            failed = failures.length > 0
+            setSelectedIds(failures.map(item => item.id))
+            if (succeeded.length > 0) {
+              const key = method === 'delete' ? 'bulk.deleted' : fields.enabled ? 'bulk.enabled' : 'bulk.disabled'
+              let message = t(key, { count: succeeded.length })
+              if (method === 'delete' && succeeded.some(item => status?.applied?.files?.includes(item.id))) message += ` ${t('delete.snapshotKept')}`
+              setNotice(message)
+              setDraft(current => {
+                if (current === null || !succeeded.some(item => item.id === current.id)) return current
+                if (method === 'delete') return null
+                return method === 'toggle' ? { ...current, enabled: fields.enabled === true } : current
+              })
+            }
+            if (failed) setFailure({ code: 'internal', message: `${t('bulk.failed', { count: failures.length })} ${failures.map(item => `${item.name}: ${errorText(t, item.result ?? {})}`).join('; ')}` })
+          } catch (error) {
+            setFailure({ code: 'internal', message: error instanceof Error ? error.message : String(error) })
+          } finally {
+            await refresh({ preserveFailure: failed })
+          }
         }
 
         const handleEdit = async (file) => {
@@ -650,6 +736,8 @@ window.__ModuleLoader__.load({
           control,
         )
 
+        const selectedFiles = files.filter(file => selectedIds.includes(file.id))
+        const allSelected = files.length > 0 && selectedFiles.length === files.length
         const applied = status !== null && status.applied !== null && typeof status.applied === 'object' ? status.applied : null
         const enabledPart = status === null ? '' : ` · ${t('status.enabled', { enabled: status.enabledFiles ?? 0, count: status.files ?? files.length })}`
         const statusLine = status === null
@@ -806,10 +894,35 @@ window.__ModuleLoader__.load({
                 onClick: handleNew,
               }, t('new.button')),
             ),
+            files.length === 0 ? null : h('div', { className: 'xxp-actions' },
+              h('label', { className: 'xxp-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: allSelected,
+                  ref: node => { if (node) node.indeterminate = selectedFiles.length > 0 && !allSelected },
+                  disabled: busy || aiBusy || listFailure !== null,
+                  onChange: event => { setSelectedIds(event.target.checked ? files.map(file => file.id) : []) },
+                }),
+                h('span', null, t('list.selectAll')),
+              ),
+              selectedFiles.length === 0 ? null : h('span', { className: 'xxp-aiHint' }, t('bulk.selected', { count: selectedFiles.length })),
+              selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy, onClick: () => setSelectedIds([]) }, t('bulk.clear')),
+              selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('toggle', { enabled: true }) } }, t('bulk.enable')),
+              selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('toggle', { enabled: false }) } }, t('bulk.disable')),
+              selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall xxp-btnDanger', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('delete') } }, t('bulk.delete')),
+            ),
             listFailure !== null && files.length > 0 ? h('p', { className: 'xxp-warn' }, t('list.unavailable')) : null,
             files.length === 0
               ? h('p', { className: 'xxp-empty' }, busy ? t('loading') : listFailure !== null ? t('list.unavailable') : t('list.empty'))
               : h('ul', { className: 'xxp-list' }, files.map(file => h('li', { key: file.id, className: 'xxp-row' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: selectedIds.includes(file.id),
+                  'aria-label': t('list.select', { name: file.name }),
+                  style: { margin: 0 },
+                  disabled: busy || aiBusy || listFailure !== null,
+                  onChange: event => { toggleSelection(file.id, event.target.checked) },
+                }),
                 h('button', {
                   type: 'button',
                   role: 'switch',
