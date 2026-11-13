@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Xiaoxing persona manager",
+    "description": "Manages XiaoxingBot persona files and applies them through the native DSH persona configuration."
+  }
+}

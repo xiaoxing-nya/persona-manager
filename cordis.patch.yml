@@ -1,0 +1,5 @@
+- insert:
+    - id: xiaoxing-persona-manager
+      name: '@xiaoxing/persona-manager'
+      config:
+        personaDir: !!js dshHomePath('xiaoxing', 'personas')

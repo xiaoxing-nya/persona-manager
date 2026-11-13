@@ -1,0 +1,40 @@
+{
+  "name": "@xiaoxing/persona-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Manage XiaoxingBot persona files and apply them as same-named DSH Agent presets.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "xiaoxing-nya",
+    "email": "xiaoxing_bot@luoli.my"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}
