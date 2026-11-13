@@ -39,7 +39,7 @@ const PERSONA_PLUGIN_NAME = '@deepseek-ai/dsh-persona'
 /** Child row id used inside an agent preset. */
 const PERSONA_ROW_ID = 'persona'
 /** Persona slots in composition order. */
-const SLOT_ORDER = Object.freeze({ identity: 0, voice: 1, instructions: 2, overlay: 3 })
+const SLOT_ORDER = Object.freeze({ identity: 0, voice: 1, instructions: 2, personality: 3 })
 /** Slot used when a file declares none. */
 const DEFAULT_SLOT = 'voice'
 /** Default order inside one slot. */
@@ -1856,7 +1856,7 @@ class PersonaService {
       entries.push({
         name: key,
         description: `Hermes personality preset: ${key}`,
-        slot: 'overlay',
+        slot: 'personality',
         enabled: selected === key,
         sourceFormat: 'hermes-personality-preset',
         sourceFile: source,
@@ -1961,7 +1961,7 @@ function createPersonaTool(service) {
         body: { type: 'string', description: 'Persona text for write; required and must not be empty.' },
         slot: {
           type: 'string',
-          enum: ['identity', 'voice', 'instructions', 'overlay'],
+          enum: ['identity', 'voice', 'instructions', 'personality'],
           description: 'Composition slot; defaults to voice.',
         },
         order: { type: 'integer', description: 'Order inside the slot; defaults to 100.' },

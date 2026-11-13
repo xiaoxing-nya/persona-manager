@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
      */
     const REMOTE_METHODS = ['list', 'read', 'write', 'delete', 'toggle', 'import', 'compose', 'apply', 'status', 'aiEdit', 'setOverrideBuiltIn']
     /** Persona slots in composition order. */
-    const SLOTS = ['identity', 'voice', 'instructions', 'overlay']
+    const SLOTS = ['identity', 'voice', 'instructions', 'personality']
 
     /** English dictionary (sentence case). */
     const EN = {
@@ -35,8 +35,6 @@ window.__ModuleLoader__.load({
       'status.enabled': 'Enabled {enabled}/{count}',
       'status.targets': 'Session mode: preset "{name}"',
       'status.overrideOn': ' · shipped presets overridden',
-      'status.preview': 'Applied text',
-      'status.previewHide': 'Hide',
       'status.dir': 'Directory',
       'status.cannotApply': 'Apply target is unavailable',
       'override.label': 'Override shipped presets',
@@ -55,7 +53,7 @@ window.__ModuleLoader__.load({
       'list.slot.identity': 'IDENTITY.md',
       'list.slot.voice': 'SOUL.md',
       'list.slot.instructions': 'AGENTS.md',
-      'list.slot.overlay': 'Overlay',
+      'list.slot.personality': 'Personality',
       'list.source.manual': 'manual',
       'list.source.openclaw-workspace': 'OpenClaw',
       'list.source.hermes-soul': 'Hermes SOUL',
@@ -67,7 +65,7 @@ window.__ModuleLoader__.load({
       'editor.name': 'Name',
       'editor.description': 'Description',
       'editor.slot': 'Category',
-      'editor.slotHint': 'Composes in order: IDENTITY → SOUL → AGENTS → overlay (OpenClaw file convention).',
+      'editor.slotHint': 'Composes in order: IDENTITY → SOUL → AGENTS → personality.',
       'editor.order': 'Order',
       'editor.body': 'Persona text',
       'editor.enabled': 'Enabled',
@@ -120,6 +118,7 @@ window.__ModuleLoader__.load({
       'status.starter': 'A minimal starter persona was created. Edit it or apply it, then select its mode in a new session.',
       'list.unavailable': 'Persona files could not be loaded. Resolve the error and refresh.',
       'preview.compose': 'Preview composition',
+      'preview.hide': 'Hide preview',
       'preview.empty': 'The current composition is empty.',
       'override.hint': 'Changes take effect on the next Apply. Only the four shipped presets are affected.',
       'apply.deploymentConfirm': 'Remove the custom deployment persona prefix/suffix so AI editing stays clean? The shipped base prompt and other settings are preserved.',
@@ -160,8 +159,6 @@ window.__ModuleLoader__.load({
       'status.enabled': '启用 {enabled}/{count}',
       'status.targets': '应用范围：预设「{name}」',
       'status.overrideOn': ' · 已覆盖内置预设',
-      'status.preview': '全文预览',
-      'status.previewHide': '收起',
       'status.dir': '目录',
       'status.cannotApply': '应用目标不可用',
       'override.label': '覆盖内置预设',
@@ -180,7 +177,7 @@ window.__ModuleLoader__.load({
       'list.slot.identity': 'IDENTITY.md',
       'list.slot.voice': 'SOUL.md',
       'list.slot.instructions': 'AGENTS.md',
-      'list.slot.overlay': '临时叠加',
+      'list.slot.personality': 'personality',
       'list.source.manual': '手动创建',
       'list.source.openclaw-workspace': 'OpenClaw',
       'list.source.hermes-soul': 'Hermes SOUL',
@@ -192,7 +189,7 @@ window.__ModuleLoader__.load({
       'editor.name': '名称',
       'editor.description': '描述',
       'editor.slot': '类别',
-      'editor.slotHint': '组合顺序：IDENTITY → SOUL → AGENTS → 叠加（沿用 OpenClaw 文件约定）。',
+      'editor.slotHint': '组合顺序：IDENTITY → SOUL → AGENTS → personality。',
       'editor.order': '排序',
       'editor.body': '人设正文',
       'editor.enabled': '启用',
@@ -245,6 +242,7 @@ window.__ModuleLoader__.load({
       'status.starter': '已创建最小基础人格。可先编辑或直接应用，再在新会话中选择该模式。',
       'list.unavailable': '人格文件未能加载。处理错误后刷新。',
       'preview.compose': '预览组合',
+      'preview.hide': '收起预览',
       'preview.empty': '当前组合为空。',
       'override.hint': '下次应用时生效，只影响四个内置预设。',
       'apply.deploymentConfirm': '为保持 AI 编辑不带用户人设，是否移除部署级自定义人格前缀/后缀？宿主默认说明及其他设置会保留。',
@@ -372,8 +370,7 @@ window.__ModuleLoader__.load({
         const [draft, setDraft] = React.useState(null)
         const [importPath, setImportPath] = React.useState('')
         const [importResult, setImportResult] = React.useState(null)
-        const [showApplied, setShowApplied] = React.useState(false)
-        const [previewKind, setPreviewKind] = React.useState('applied')
+        const [showPreview, setShowPreview] = React.useState(false)
         const [previewText, setPreviewText] = React.useState('')
         const [aiBusy, setAiBusy] = React.useState(false)
 
@@ -417,7 +414,7 @@ window.__ModuleLoader__.load({
           setStatus(statusResult.ok ? (statusResult.value ?? null) : null)
           const problem = !listResult.ok ? listResult : !statusResult.ok ? statusResult : null
           if (problem !== null || options.preserveFailure !== true) setFailure(problem)
-          setShowApplied(false)
+          setShowPreview(false)
           setBusy(false)
         }, [call])
 
@@ -471,15 +468,16 @@ window.__ModuleLoader__.load({
           await refresh()
         }
 
-        const previewComposition = async () => {
+        /** One preview control: expand with the saved composition, collapse without refetching. */
+        const togglePreview = async () => {
+          if (showPreview) { setShowPreview(false); return }
           setBusy(true)
           setFailure(null)
           const result = await call('compose', {})
           setBusy(false)
           if (!result.ok) { setFailure(result); return }
-          setPreviewKind('composed')
           setPreviewText(result.value?.text ?? '')
-          setShowApplied(true)
+          setShowPreview(true)
         }
 
         /** Persist the shipped-preset override switch. */
@@ -654,7 +652,6 @@ window.__ModuleLoader__.load({
         const targetsLine = status === null || applied === null
           ? ''
           : `${t('status.targets', { name: applied.name !== '' ? applied.name : applied.presetId })}${status.builtInOverridden === true ? t('status.overrideOn') : ''}${status.needsApply && status.overrideBuiltIn !== applied.overrideBuiltIn ? t('status.overridePending') : ''}`
-        const appliedText = typeof status?.appliedText === 'string' ? status.appliedText : ''
 
         return h('div', { className: 'xxp-root' },
           h('style', { dangerouslySetInnerHTML: { __html: STYLES } }),
@@ -691,18 +688,8 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'xxp-btn',
                   disabled: busy || status === null,
-                  onClick: () => { void previewComposition() },
-                }, t('preview.compose')),
-                h('button', {
-                  type: 'button',
-                  className: 'xxp-btn',
-                  disabled: appliedText === '',
-                  onClick: () => {
-                    setPreviewText(appliedText)
-                    setPreviewKind('applied')
-                    setShowApplied(current => !current || previewKind !== 'applied')
-                  },
-                }, showApplied ? t('status.previewHide') : t('status.preview')),
+                  onClick: () => { void togglePreview() },
+                }, showPreview ? t('preview.hide') : t('preview.compose')),
                 h('button', {
                   type: 'button',
                   className: 'xxp-btn',
@@ -711,8 +698,8 @@ window.__ModuleLoader__.load({
                 }, t('refresh')),
               ),
             ),
-            showApplied ? h('div', { className: 'xxp-statusPreview' },
-              h('span', { className: 'xxp-statusLine' }, previewKind === 'composed' ? t('preview.compose') : t('status.preview')),
+            showPreview ? h('div', { className: 'xxp-statusPreview' },
+              h('span', { className: 'xxp-statusLine' }, t('preview.compose')),
               previewText === ''
                 ? h('p', { className: 'xxp-empty' }, t('preview.empty'))
                 : h('pre', { className: 'xxp-pre' }, previewText),

@@ -81,11 +81,38 @@ test('new Host failure codes and first-run actions have both language entries', 
   const dictionaries = client.locales.get('xiaoxing-persona')
   for (const language of ['en', 'zh']) {
     const dictionary = dictionaries[language]
-    for (const key of ['status.starter', 'status.unavailable', 'preview.compose', 'override.hint', 'ai.unsaved',
+    for (const key of ['status.starter', 'status.unavailable', 'preview.compose', 'preview.hide', 'override.hint', 'ai.unsaved',
       'error.deployment-persona', 'error.invalid-state', 'error.rollback-failed', 'error.disposed', 'error.preset-failed',
       'error.import-access', 'error.import-too-large', 'error.navigate-failed', 'error.service-unavailable']) {
       assert.equal(typeof dictionary[key], 'string', `${language}:${key}`)
     }
   }
+  client.dispose()
+})
+
+test('one composition preview control and the personality slot replace the duplicate applied-text view', async () => {
+  const client = makeClient()
+  await client.plugin.apply(client.ctx)
+  const dictionaries = client.locales.get('xiaoxing-persona')
+  for (const language of ['en', 'zh']) {
+    const dictionary = dictionaries[language]
+    assert.equal(typeof dictionary['list.slot.personality'], 'string', `${language}: personality slot label`)
+    assert.match(dictionary['list.slot.personality'], /personality/i, `${language}: the slot label names personality`)
+    assert.equal(dictionary['list.slot.overlay'], undefined, `${language}: the overlay label is gone`)
+    assert.equal(dictionary['status.preview'], undefined, `${language}: the duplicate applied-text label is gone`)
+    assert.equal(dictionary['status.previewHide'], undefined, `${language}: the duplicate collapse label is gone`)
+    assert.match(dictionary['editor.slotHint'], /personality/, `${language}: the composition hint names personality`)
+    assert.doesNotMatch(dictionary['editor.slotHint'], /overlay|叠加/iu, `${language}: the hint drops overlay`)
+  }
+  // The preview reads the saved composition through the shared Host operation.
+  assert.equal((source.match(/call\('compose'/g) ?? []).length, 1, 'exactly one compose call site')
+  assert.match(source, /const togglePreview = async \(\) => \{/)
+  assert.match(source, /if \(showPreview\) \{ setShowPreview\(false\); return \}/, 'collapsing does not refetch')
+  assert.equal((source.match(/t\('preview\.compose'\)/g) ?? []).length, 2, 'one button label and one panel heading')
+  for (const retired of ['previewKind', 'showApplied', 'setShowApplied', 'appliedText']) {
+    assert.equal(source.includes(retired), false, `retired preview state must not remain: ${retired}`)
+  }
+  assert.match(source, /const SLOTS = \['identity', 'voice', 'instructions', 'personality'\]/)
+  assert.equal(source.includes("'overlay'"), false, 'the client no longer offers the overlay slot')
   client.dispose()
 })

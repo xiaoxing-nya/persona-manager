@@ -67,6 +67,15 @@ test('Hermes YAML imports only selected personalities and disabled system instru
   assert.equal(result.created.find(item => item.name === 'quiet').enabled, true)
   assert.equal(result.created.find(item => item.name === 'lively').enabled, false)
   assert.equal(result.created.find(item => item.slot === 'instructions').enabled, false)
+
+  // Personalities use the canonical slot, both in the projection and on disk.
+  for (const name of ['quiet', 'lively']) {
+    const created = result.created.find(item => item.name === name)
+    assert.equal(created.slot, 'personality')
+    const stored = success(await f.service.read({ id: created.id })).file
+    assert.equal(stored.slot, 'personality')
+    assert.match(await readFile(join(f.data, `${created.id}.md`), 'utf8'), /^slot: personality$/m)
+  }
 })
 
 test('Hermes distribution version is used only in its default description', async t => {

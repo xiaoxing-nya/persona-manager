@@ -618,6 +618,33 @@ describe('CRUD and file ids', () => {
     expectOk(await service.toggle({ id: second.file.id, enabled: false }), 'toggle collided id')
     expectOk(await service.remove({ id: second.file.id }), 'remove collided id')
   })
+
+  it('stores the personality slot and exposes only canonical slots to the tool', async () => {
+    const { service, fake } = await loadService()
+    const created = expectOk(await service.write({ name: '叠加人格', slot: 'personality', body: 'PERSONA' }), 'write personality')
+    assert.equal(created.file.slot, 'personality')
+    assert.match(await readFile(join(tmp, `${created.file.id}.md`), 'utf8'), /^slot: personality$/m)
+
+    const tool = fake.tools.find(candidate => candidate.name === 'persona_manager')
+    assert.ok(tool, 'the persona_manager tool must be registered')
+    assert.deepEqual(tool.parameters.properties.slot.enum, ['identity', 'voice', 'instructions', 'personality'])
+
+    const rejected = expectFailure(await service.write({ name: 'unknown', slot: 'nope', body: 'x' }), 'unknown slot')
+    assert.equal(rejected.code, 'invalid-slot')
+    for (const invalid of ['overlay', 'constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const failure = expectFailure(await service.write({ name: `invalid-${invalid}`, slot: invalid, body: 'x' }), `slot ${invalid}`)
+      assert.equal(failure.code, 'invalid-slot', `${invalid} must not be accepted as a slot`)
+    }
+  })
+
+  it('composes identity, voice, instructions and personality in that order', async () => {
+    const { service } = await loadService()
+    for (const [slot, body] of [['personality', 'PERSONALITY'], ['instructions', 'INSTRUCTIONS'], ['voice', 'VOICE'], ['identity', 'IDENTITY']]) {
+      expectOk(await service.write({ name: `slot-${slot}`, slot, body }), `write ${slot}`)
+    }
+    const composed = expectOk(await service.compose({}), 'compose canonical order')
+    assert.deepEqual(composed.text.split('\n\n'), ['IDENTITY', 'VOICE', 'INSTRUCTIONS', 'PERSONALITY'])
+  })
 })
 
 // ---------------------------------------------------------------------------
