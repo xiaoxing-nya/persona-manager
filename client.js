@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
 
     /** English dictionary (sentence case). */
     const EN = {
-      'title': 'Xiaoxing persona',
+      'title': 'Xiaoxing persona manager',
       'intro': 'Persona files are plain Markdown below the persona directory. Enabled files are composed in slot order and applied as a same-named Agent preset; switch a session mode to use it.',
       'loading': 'Loading personas…',
       'refresh': 'Refresh',
@@ -112,11 +112,46 @@ window.__ModuleLoader__.load({
       'error.unsupported-directory': 'This directory is not a recognized persona source.',
       'error.yaml-invalid': 'The YAML file could not be parsed.',
       'error.internal': 'The persona service failed.',
+      'busy': 'Working…',
+      'status.unavailable': 'Service unavailable',
+      'status.needsApply': 'Changes pending — apply to update the preset',
+      'status.presetUnavailable': 'Applied snapshot saved, but preset could not load',
+      'status.overridePending': ' · override setting pending application',
+      'status.starter': 'A minimal starter persona was created. Edit it or apply it, then select its mode in a new session.',
+      'list.unavailable': 'Persona files could not be loaded. Resolve the error and refresh.',
+      'preview.compose': 'Preview composition',
+      'preview.empty': 'The current composition is empty.',
+      'override.hint': 'Changes take effect on the next Apply. Only the four shipped presets are affected.',
+      'apply.deploymentConfirm': 'Remove the custom deployment persona prefix/suffix so AI editing stays clean? The shipped base prompt and other settings are preserved.',
+      'apply.overrideConfirm': 'Apply this persona to the four shipped presets as well? Existing sessions keep their current revision.',
+      'apply.deploymentCleared': ' Custom deployment persona removed.',
+      'apply.skipped': ' {count} externally changed preset(s) were preserved.',
+      'apply.partial': 'Some configuration updates failed. Inspect the reported state before retrying.',
+      'override.saved': 'Override preference saved; apply the persona to make it effective.',
+      'delete.snapshotKept': 'File deleted. The applied snapshot stays unchanged until you apply again.',
+      'ai.unsaved': 'Save your edits before using AI assist for this existing persona.',
+      'error.unsafe-file': 'A persona or state file is not a regular file. Links and directories are not supported.',
+      'error.invalid-state': 'Saved state is invalid. It was preserved; repair it before retrying.',
+      'error.deployment-persona': 'Removing a custom deployment persona requires confirmation.',
+      'error.rollback-failed': 'Apply and recovery failed. Inspect the current preset and configuration before retrying.',
+      'error.config-changed': 'Configuration changed during Apply. Refresh and retry.',
+      'error.preset-failed': 'The preset could not load. Check its dependencies and refresh.',
+      'error.disposed': 'The plugin was unloaded. Reopen this page after reload.',
+      'error.invalid-description': 'Description must be text.',
+      'error.invalid-emoji': 'Emoji must be text.',
+      'error.initialization-failed': 'The persona directory could not be initialized.',
+      'error.import-access': 'This source is outside the permitted import scope.',
+      'error.import-too-large': 'The import exceeds the configured file-size limit.',
+      'error.no-navigation': 'Session navigation is unavailable in this client.',
+      'error.navigate-failed': 'The AI session was created, but could not be opened.',
+      'error.service-unavailable': 'The Host service is unavailable. Refresh after plugin reload.',
+      'error.config-authority': 'A home patch or command-line overlay controls this setting. Change that source first.',
+      'error.confirmation-unavailable': 'This client cannot show a confirmation dialog. Reopen in the supported Web UI.',
     }
 
     /** Chinese dictionary. */
     const ZH = {
-      'title': '小星人格',
+      'title': '小星人格管理',
       'intro': '人格文件是人格目录下的纯 Markdown 文件。启用的文件按槽位顺序组合，应用为同名 Agent 预设，按会话切换使用。',
       'loading': '正在加载人格…',
       'refresh': '刷新',
@@ -202,6 +237,41 @@ window.__ModuleLoader__.load({
       'error.unsupported-directory': '该目录不是可识别的人格来源。',
       'error.yaml-invalid': 'YAML 文件解析失败。',
       'error.internal': '人格服务执行失败。',
+      'busy': '处理中…',
+      'status.unavailable': '服务不可用',
+      'status.needsApply': '有修改待应用，应用后更新预设',
+      'status.presetUnavailable': '应用快照已保存，但预设未能加载',
+      'status.overridePending': ' · 覆盖设置待应用',
+      'status.starter': '已创建最小基础人格。可先编辑或直接应用，再在新会话中选择该模式。',
+      'list.unavailable': '人格文件未能加载。处理错误后刷新。',
+      'preview.compose': '预览组合',
+      'preview.empty': '当前组合为空。',
+      'override.hint': '下次应用时生效，只影响四个内置预设。',
+      'apply.deploymentConfirm': '为保持 AI 编辑不带用户人设，是否移除部署级自定义人格前缀/后缀？宿主默认说明及其他设置会保留。',
+      'apply.overrideConfirm': '同时把此人格应用到四个内置预设？已有会话仍保留原版本。',
+      'apply.deploymentCleared': ' 已移除部署级自定义人格。',
+      'apply.skipped': ' 已保留 {count} 个外部修改的预设。',
+      'apply.partial': '部分配置更新失败，请检查实际状态再重试。',
+      'override.saved': '覆盖选择已保存，下次应用时生效。',
+      'delete.snapshotKept': '文件已删除，已应用的快照保持不变；再次应用才更新预设。',
+      'ai.unsaved': '请先保存当前修改，再对这个人格使用 AI 辅助。',
+      'error.unsafe-file': '人设或状态文件不是普通文件，不支持符号链接或目录。',
+      'error.invalid-state': '保存的状态无效，文件已保留，请修复后重试。',
+      'error.deployment-persona': '移除部署级自定义人格需要确认。',
+      'error.rollback-failed': '应用和恢复均失败，请检查当前预设与配置后再重试。',
+      'error.config-changed': '应用期间配置已变化，请刷新后重试。',
+      'error.preset-failed': '预设未能加载，请检查依赖后刷新。',
+      'error.disposed': '插件已卸载，重新加载后请重开此页面。',
+      'error.invalid-description': '描述必须是文本。',
+      'error.invalid-emoji': 'Emoji 必须是文本。',
+      'error.initialization-failed': '人格目录初始化失败。',
+      'error.import-access': '该来源不在允许的导入范围内。',
+      'error.import-too-large': '导入文件超过配置的大小上限。',
+      'error.no-navigation': '当前客户端无法打开会话。',
+      'error.navigate-failed': 'AI 会话已创建，但打开失败。',
+      'error.service-unavailable': '宿主服务不可用，请在插件重新加载后刷新。',
+      'error.config-authority': '该设置由 home patch 或命令行覆盖层控制，请先修改对应来源。',
+      'error.confirmation-unavailable': '当前客户端无法显示确认对话框，请在受支持的 Web 界面中重新打开。',
     }
 
     /** Section styles; only `--dsw-alias-*` theme tokens carry color. */
@@ -282,20 +352,19 @@ window.__ModuleLoader__.load({
     function createSection(ctx, fallbackT) {
       /** Localized text for one Host failure code, falling back to the Host message. */
       function errorText(t, failure) {
-        const key = `error.${failure.code}`
+        const code = String(failure.code ?? 'internal')
+        const key = code.startsWith('gateway/') ? 'error.service-unavailable' : `error.${code}`
         const localized = t(key)
-        if (localized !== key) {
-          // Surface the caught transport error beside the generic notice.
-          return failure.code === 'remote-unavailable' && failure.message !== ''
-            ? `${localized} (${failure.message})`
-            : localized
-        }
-        return failure.message === '' ? t('error.internal') : failure.message
+        const detail = String(failure.message ?? '')
+        if (localized !== key) return detail === '' ? localized : `${localized} (${detail})`
+        return detail === '' ? t('error.internal') : detail
       }
 
       return function PersonaSection(props) {
         const t = typeof props.t === 'function' ? props.t : fallbackT
         const [files, setFiles] = React.useState([])
+        const [listFailure, setListFailure] = React.useState(null)
+        const refreshGeneration = React.useRef(0)
         const [status, setStatus] = React.useState(null)
         const [failure, setFailure] = React.useState(null)
         const [notice, setNotice] = React.useState('')
@@ -304,6 +373,8 @@ window.__ModuleLoader__.load({
         const [importPath, setImportPath] = React.useState('')
         const [importResult, setImportResult] = React.useState(null)
         const [showApplied, setShowApplied] = React.useState(false)
+        const [previewKind, setPreviewKind] = React.useState('applied')
+        const [previewText, setPreviewText] = React.useState('')
         const [aiBusy, setAiBusy] = React.useState(false)
 
         /** Call one Remote method and unwrap both envelopes. */
@@ -337,41 +408,78 @@ window.__ModuleLoader__.load({
         }, [])
 
         /** Re-read the list and the apply status. */
-        const refresh = React.useCallback(async () => {
+        const refresh = React.useCallback(async (options = {}) => {
+          const generation = ++refreshGeneration.current
           const [listResult, statusResult] = await Promise.all([call('list', {}), call('status', {})])
+          if (generation !== refreshGeneration.current) return
           if (listResult.ok) setFiles(Array.isArray(listResult.value?.files) ? listResult.value.files : [])
-          if (statusResult.ok) setStatus(statusResult.value ?? null)
+          setListFailure(listResult.ok ? null : listResult)
+          setStatus(statusResult.ok ? (statusResult.value ?? null) : null)
           const problem = !listResult.ok ? listResult : !statusResult.ok ? statusResult : null
-          setFailure(problem)
+          if (problem !== null || options.preserveFailure !== true) setFailure(problem)
+          setShowApplied(false)
           setBusy(false)
         }, [call])
 
-        React.useEffect(() => { void refresh() }, [refresh])
+        React.useEffect(() => {
+          void refresh()
+          return () => { refreshGeneration.current += 1 }
+        }, [refresh])
 
         const confirmAction = (message) => {
-          if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true
+          if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+            setFailure({ code: 'confirmation-unavailable', message: '' })
+            return false
+          }
           return window.confirm(message)
         }
 
-        const runApply = async (options) => {
+        const runApply = async (options, overrideConfirmed = false) => {
+          if (status?.overrideBuiltIn === true && !overrideConfirmed) {
+            if (!confirmAction(t('apply.overrideConfirm'))) return
+            overrideConfirmed = true
+          }
           setBusy(true)
           setFailure(null)
           setNotice('')
           const result = await call('apply', options)
           if (!result.ok) {
             if (result.code === 'template-groups' && options.force !== true && confirmAction(t('apply.templateConfirm'))) {
-              return runApply({ force: true })
+              return runApply({ ...options, force: true }, overrideConfirmed)
             }
             if (result.code === 'empty' && options.allowEmpty !== true && confirmAction(t('apply.emptyConfirm'))) {
-              return runApply({ allowEmpty: true })
+              return runApply({ ...options, allowEmpty: true }, overrideConfirmed)
+            }
+            if (result.code === 'deployment-persona' && options.clearDeployment !== true && confirmAction(t('apply.deploymentConfirm'))) {
+              return runApply({ ...options, clearDeployment: true }, overrideConfirmed)
             }
             setBusy(false)
-            setFailure(result)
+            setFailure(current => current?.code === 'confirmation-unavailable' ? current : result)
+            await refresh({ preserveFailure: true })
             return
           }
           const value = result.value ?? {}
-          setNotice(value.presetId === '' ? t('apply.doneClear') : t('apply.done', { name: value.presetName ?? '' }))
+          let message = value.presetId === '' ? t('apply.doneClear') : t('apply.done', { name: value.presetName ?? '' })
+          if (value.deploymentCleared === true) message += t('apply.deploymentCleared')
+          if (Array.isArray(value.skipped) && value.skipped.length > 0) message += t('apply.skipped', { count: value.skipped.length })
+          if (Array.isArray(value.failures) && value.failures.length > 0) {
+            setFailure({ code: 'internal', message: t('apply.partial') })
+            await refresh({ preserveFailure: true })
+            return
+          }
+          setNotice(message)
           await refresh()
+        }
+
+        const previewComposition = async () => {
+          setBusy(true)
+          setFailure(null)
+          const result = await call('compose', {})
+          setBusy(false)
+          if (!result.ok) { setFailure(result); return }
+          setPreviewKind('composed')
+          setPreviewText(result.value?.text ?? '')
+          setShowApplied(true)
         }
 
         /** Persist the shipped-preset override switch. */
@@ -381,7 +489,8 @@ window.__ModuleLoader__.load({
           setNotice('')
           const result = await call('setOverrideBuiltIn', { enabled })
           if (!result.ok) setFailure(result)
-          await refresh()
+          else setNotice(t('override.saved'))
+          await refresh({ preserveFailure: !result.ok })
         }
 
         const handleToggle = async (file) => {
@@ -390,7 +499,7 @@ window.__ModuleLoader__.load({
           setNotice('')
           const result = await call('toggle', { id: file.id, enabled: file.enabled !== true })
           if (!result.ok) setFailure(result)
-          await refresh()
+          await refresh({ preserveFailure: !result.ok })
         }
 
         const handleEdit = async (file) => {
@@ -409,6 +518,7 @@ window.__ModuleLoader__.load({
               order: String(loaded.order ?? 100),
               enabled: loaded.enabled !== false,
               body: loaded.body ?? '',
+              savedBody: loaded.body ?? '',
             })
           } else {
             setFailure(result)
@@ -442,8 +552,13 @@ window.__ModuleLoader__.load({
             enabled: draft.enabled === true,
             body: String(draft.body),
           }
-          const order = Number.parseInt(String(draft.order), 10)
-          if (Number.isFinite(order)) request.order = order
+          const order = Number(String(draft.order))
+          if (String(draft.order).trim() === '' || !Number.isSafeInteger(order)) {
+            setBusy(false)
+            setFailure({ code: 'invalid-order', message: '' })
+            return
+          }
+          request.order = order
           if (draft.isNew !== true && typeof draft.id === 'string' && draft.id !== '') request.id = draft.id
           const result = await call('write', request)
           if (!result.ok) {
@@ -462,8 +577,11 @@ window.__ModuleLoader__.load({
           setNotice('')
           const result = await call('delete', { id: file.id })
           if (!result.ok) setFailure(result)
-          if (draft !== null && draft.id === file.id) setDraft(null)
-          await refresh()
+          else {
+            if (status?.applied?.files?.includes(file.id)) setNotice(t('delete.snapshotKept'))
+            if (draft !== null && draft.id === file.id) setDraft(null)
+          }
+          await refresh({ preserveFailure: !result.ok })
         }
 
         const handleImport = async () => {
@@ -481,7 +599,7 @@ window.__ModuleLoader__.load({
             setFailure(result)
             setImportResult(null)
           }
-          await refresh()
+          await refresh({ preserveFailure: !result.ok })
         }
 
         /** Send the editor's persona (creation brief for a new draft) to a fresh AI session. */
@@ -490,7 +608,14 @@ window.__ModuleLoader__.load({
           const isNew = draft.isNew === true
           const named = !isNew && typeof draft.id === 'string' && draft.id !== '' ? draft.id : ''
           const draftName = isNew && typeof draft.name === 'string' ? draft.name.trim() : ''
-          const instruction = draftName === '' ? '' : `人格名字用「${draftName}」。`
+          if (!isNew && draft.savedBody !== undefined && draft.body !== draft.savedBody) {
+            setFailure({ code: 'internal', message: t('ai.unsaved') })
+            return
+          }
+          const instruction = [
+            draftName === '' ? '' : `人格名字用「${draftName}」。`,
+            isNew && draft.body.trim() !== '' ? `创作参考草稿：\n${draft.body}` : '',
+          ].filter(Boolean).join('\n')
           setAiBusy(true)
           setFailure(null)
           setNotice('')
@@ -502,8 +627,14 @@ window.__ModuleLoader__.load({
           }
           const sessionId = result.value?.sessionId
           if (typeof sessionId === 'string' && sessionId !== '') {
-            try { ctx.uiWorkspace.openSession(sessionId) } catch { /* navigation is best-effort; the session still runs */ }
-            if (typeof props.close === 'function') props.close()
+            try {
+              const navigation = ctx.get('uiWorkspace')
+              if (typeof navigation?.openSession !== 'function') throw new Error(t('error.no-navigation'))
+              navigation.openSession(sessionId)
+              if (typeof props.close === 'function') props.close()
+            } catch (error) {
+              setFailure({ code: 'navigate-failed', message: `${sessionId}: ${error instanceof Error ? error.message : String(error)}` })
+            }
           }
         }
 
@@ -516,13 +647,13 @@ window.__ModuleLoader__.load({
         const applied = status !== null && status.applied !== null && typeof status.applied === 'object' ? status.applied : null
         const enabledPart = status === null ? '' : ` · ${t('status.enabled', { enabled: status.enabledFiles ?? 0, count: status.files ?? files.length })}`
         const statusLine = status === null
-          ? t('loading')
+          ? (busy ? t('loading') : t('status.unavailable'))
           : (applied === null
               ? `${t('status.empty')}${enabledPart}`
               : `${t('status.applied', { chars: applied.chars ?? 0 })}${enabledPart}`)
         const targetsLine = status === null || applied === null
           ? ''
-          : `${t('status.targets', { name: applied.name !== '' ? applied.name : applied.presetId })}${status.overrideBuiltIn === true ? t('status.overrideOn') : ''}`
+          : `${t('status.targets', { name: applied.name !== '' ? applied.name : applied.presetId })}${status.builtInOverridden === true ? t('status.overrideOn') : ''}${status.needsApply && status.overrideBuiltIn !== applied.overrideBuiltIn ? t('status.overridePending') : ''}`
         const appliedText = typeof status?.appliedText === 'string' ? status.appliedText : ''
 
         return h('div', { className: 'xxp-root' },
@@ -535,7 +666,10 @@ window.__ModuleLoader__.load({
               h('div', { className: 'xxp-statusMain' },
                 h('div', { className: 'xxp-statusLine' }, h('strong', null, statusLine)),
                 targetsLine === '' ? null : h('div', { className: 'xxp-statusLine' }, targetsLine),
-                status !== null && status.canApply !== true ? h('div', { className: 'xxp-statusLine xxp-warn' }, t('status.cannotApply')) : null,
+                status !== null && status.canApply !== true ? h('div', { className: 'xxp-statusLine xxp-warn' }, errorText(t, { code: status.canApplyReason || 'no-editor', message: '' })) : null,
+                status !== null ? h('div', { className: 'xxp-statusLine' }, `${t('status.dir')}: `, h('span', { className: 'xxp-mono' }, status.personaDir || '—')) : null,
+                applied !== null && applied.available === false ? h('div', { className: 'xxp-statusLine xxp-warn' }, t('status.presetUnavailable')) : null,
+                applied !== null && status?.needsApply === true ? h('div', { className: 'xxp-statusLine' }, t('status.needsApply')) : null,
               ),
               h('div', { className: 'xxp-actions' },
                 h('label', { className: 'xxp-check' },
@@ -550,14 +684,24 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   className: 'xxp-btn xxp-btnPrimary',
-                  disabled: busy,
+                  disabled: busy || aiBusy || listFailure !== null || status?.canApply !== true,
                   onClick: () => { void runApply({}) },
-                }, busy ? t('apply.busy') : t('apply.button')),
+                }, busy ? t('busy') : t('apply.button')),
+                h('button', {
+                  type: 'button',
+                  className: 'xxp-btn',
+                  disabled: busy || status === null,
+                  onClick: () => { void previewComposition() },
+                }, t('preview.compose')),
                 h('button', {
                   type: 'button',
                   className: 'xxp-btn',
                   disabled: appliedText === '',
-                  onClick: () => { setShowApplied(current => !current) },
+                  onClick: () => {
+                    setPreviewText(appliedText)
+                    setPreviewKind('applied')
+                    setShowApplied(current => !current || previewKind !== 'applied')
+                  },
                 }, showApplied ? t('status.previewHide') : t('status.preview')),
                 h('button', {
                   type: 'button',
@@ -568,13 +712,15 @@ window.__ModuleLoader__.load({
               ),
             ),
             showApplied ? h('div', { className: 'xxp-statusPreview' },
-              appliedText === ''
-                ? h('p', { className: 'xxp-empty' }, t('status.empty'))
-                : h('pre', { className: 'xxp-pre' }, appliedText),
-              status !== null ? h('div', { className: 'xxp-statusLine' }, `${t('status.dir')}: `, h('span', { className: 'xxp-mono' }, status.personaDir === '' ? '—' : status.personaDir)) : null,
+              h('span', { className: 'xxp-statusLine' }, previewKind === 'composed' ? t('preview.compose') : t('status.preview')),
+              previewText === ''
+                ? h('p', { className: 'xxp-empty' }, t('preview.empty'))
+                : h('pre', { className: 'xxp-pre' }, previewText),
             ) : null,
           ),
 
+          status?.starterCreated === true && applied === null ? h('p', { className: 'xxp-intro' }, t('status.starter')) : null,
+          h('p', { className: 'xxp-hint' }, t('override.hint')),
           notice === '' ? null : h('p', { className: 'xxp-notice' }, notice),
           failure === null ? null : h('div', { className: 'xxp-error', role: 'alert' },
             h('strong', null, t('error.title')),
@@ -592,7 +738,8 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   className: 'xxp-btn xxp-btnSmall',
-                  disabled: aiBusy || busy,
+                  disabled: aiBusy || busy || status?.canAiEdit !== true || typeof ctx.get('uiWorkspace')?.openSession !== 'function',
+                  title: status?.canAiEdit !== true ? errorText(t, { code: status?.canAiEditReason || 'preset-failed', message: '' }) : typeof ctx.get('uiWorkspace')?.openSession !== 'function' ? t('error.no-navigation') : '',
                   onClick: () => { void handleAiEdit() },
                 }, aiBusy ? t('ai.busy') : t('ai.button')),
                 h('label', { className: 'xxp-check' },
@@ -664,8 +811,9 @@ window.__ModuleLoader__.load({
                 onClick: handleNew,
               }, t('new.button')),
             ),
+            listFailure !== null && files.length > 0 ? h('p', { className: 'xxp-warn' }, t('list.unavailable')) : null,
             files.length === 0
-              ? h('p', { className: 'xxp-empty' }, busy ? t('loading') : t('list.empty'))
+              ? h('p', { className: 'xxp-empty' }, busy ? t('loading') : listFailure !== null ? t('list.unavailable') : t('list.empty'))
               : h('ul', { className: 'xxp-list' }, files.map(file => h('li', { key: file.id, className: 'xxp-row' },
                 h('button', {
                   type: 'button',
@@ -717,7 +865,7 @@ window.__ModuleLoader__.load({
                 className: 'xxp-btn',
                 disabled: busy,
                 onClick: () => { void handleImport() },
-              }, busy ? t('import.busy') : t('import.button')),
+              }, busy ? t('busy') : t('import.button')),
             ),
             importResult === null ? null : h('div', { className: 'xxp-result' },
               h('span', { className: 'xxp-resultLine' }, t('import.created', { count: importResult.created?.length ?? 0 })),
@@ -754,7 +902,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'remote', 'locale', 'uiWorkspace'],
+      inject: ['slots', 'remote', 'locale'],
       async apply(ctx) {
         const t = ctx.locale.bind(NS)
         ctx.effect(() => ctx.locale.register(NS, { en: EN, zh: ZH }), 'xiaoxing-persona.locale')
@@ -773,7 +921,12 @@ window.__ModuleLoader__.load({
           result: { mode: 'strict', typeSymbol: `@xiaoxing/persona-manager#res.${method}`, create: () => null },
           invocation: { kind: 'direct' },
         }))
-        await ctx.remote.$mount({ package: '@xiaoxing/persona-manager', descriptors })
+        try {
+          await ctx.remote.$mount({ package: '@xiaoxing/persona-manager', descriptors })
+        } catch (error) {
+          // Keep the section available so its error state can explain the failure.
+          ctx.logger?.warn(`persona Remote mount failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
 
         const Section = createSection(ctx, t)
         ctx.slots.inject('settings.section', () => ctx.slots.register({

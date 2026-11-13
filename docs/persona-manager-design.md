@@ -1,139 +1,106 @@
 # 人格管理插件设计
 
-本文描述 `@xiaoxing/persona-manager` 当前的 0.1.0 实现。首次纳入 Git 的是已经验收的代码快照，不重建此前未受版本管理的中间版本。
+本文描述独立插件 `@xiaoxing/persona-manager` 的 `0.2.0-rc.1` 发布候选。首次 Git 导入的 0.1.0 是此前已验收快照；本轮是在其上进行有测试的产品化修复，不重建历史中间版本。
 
 ## 1. 仓库与依赖
 
-这是独立插件仓库：源码、包清单、资源、说明文档与许可均在本目录内。安装入口为本仓库根目录，不依赖仓库外的文件，也不依赖其他插件。不同插件分别维护自己的提交历史，不通过跨仓库相对导入互相调用。
+源码、资源、默认模板、文档、许可和测试都在本仓库内，只通过 DSH 原生服务协作，不依赖其他插件源码或本机父目录布局。
 
-```text
-persona-manager/
-├── .gitignore
-├── .gitattributes
-├── package.json
-├── cordis.patch.yml
-├── index.js
-├── client.js
-├── locale/
-│   ├── en.json
-│   └── zh.json
-├── icon.svg
-├── README.md
-├── CONTRIBUTING.md
-├── LICENSE
-└── docs/
-    └── persona-manager-design.md
-```
-
-Host 仅使用 Node 内置模块，Client 的 React 与 DSH 能力由宿主模块表提供。没有独立服务进程或 npm 运行依赖；DSH 的服务、Remote 描述符与槽位 API 属于宿主接口，升级时仍需验证兼容性。
-
-| 宿主服务 | 用途 |
+| 文件/目录 | 职责 |
 |---|---|
-| `tools` | 注册模型工具，是 Host 的声明式依赖 |
-| `configEditor` | 读取预设的继承配置，覆盖或还原原生配置 |
-| `agentPresets` | 注册、注销、选择人格与 AI 编辑预设 |
-| `sessionController` | 创建并激活 AI 编辑会话 |
-| `sessions` | AI 编辑首条消息的持久化确认 |
-| `workspaceRegistry` | 将 AI 编辑会话挂到首个工作区 |
+| [index.js](<../index.js>) | Host 服务、模型工具、文件管理与预设生命周期 |
+| [client.js](<../client.js>) | 设置页、Remote 挂载、状态与用户确认 |
+| [defaults/basic.md](<../defaults/basic.md>) | 中性、最小基础人格模板 |
+| [package.json](<../package.json>) | 独立包、兼容范围、资源与检查入口 |
+| [cordis.patch.yml](<../cordis.patch.yml>) | 插入 Host 行并提供默认目录 |
+| `tests/` | 隔离行为与 Client 注册契约测试 |
+| `scripts/` | 包文件、默认模板与文档链接检查 |
 
-后五项通过 `ctx.get` 延迟读取；缺失时按操作返回错误或不提供相关能力，不通过其他小星Bot插件补齐。
+Host 仅使用 Node 内置模块。React 与 Client 服务由 DSH 模块表提供；没有 npm 运行依赖或独立 Web 服务。兼容声明面向 DSH `>=0.2.2-rc.1 <0.3.0-0`，实际宿主接口核验基于 `0.2.2-rc.1`；这不是对未测试版本的实机认证。
 
-## 2. Host、Client 与 Remote
+声明式 Host 依赖为 `tools`；`agentPresets`、`configEditor`、`sessionController`、`sessions`、`workspaceRegistry`、`workingDirectory` 与 `profileContext` 按需要读取。可选服务不缓存缺失状态，缺失能力通过状态/错误明确显示。
 
-[index.js](<../index.js>) 为函数式插件，导出 `inject` / `apply`，通过 `ctx.effect` 注册 `xiaoxingPersona` 服务、`persona_manager` 工具与预设生命周期清理。
+## 2. 首次使用与文件安全
 
-[client.js](<../client.js>) 通过 `window.__ModuleLoader__.load` 挂载。它注册 `settings.section` 与 `settings.section.icon`（ID 为 `xiaoxing-persona`），使用 `xiaoxing-persona` 命名空间中的中英文字典。
+数据目录优先取 `personaDir`，再取 `profileContext.home` / `DSH_HOME` 下的 `xiaoxing/personas`。默认值由 bundle 的 `!!js dshHomePath(...)` 提供，目录不属于源码仓库。
 
-服务实例的 `typertRemote` 字段提供 `{service, serviceKey, namespace}` 绑定，原型上的 `@deepseek-ai/dsh-typert-protocol/remote-methods` 标记提供方法表。网关按源码中的简单 `request` 参数名派生 JSON 参数，因此 Remote 方法不能改成解构参数而仍沿用现有描述符。
+启动安排 `initialize()`，与后续操作使用同一队列：
 
-Host 的 `remove` 在 wire 上导出为 `delete`，避免与客户端 Remote 命名空间已有方法冲突。Client 动态挂载 11 个方法后，通过 `ctx.get('remote.xiaoxingPersona')` 访问，而不是依赖未注入的属性代理。
+1. 有合法 `.initialized.json` 时不再创建默认文件。
+2. 未初始化且目录已有任何内容时，仅记录初始化，不插入默认人格。
+3. 真正空目录中以 `wx` 独占创建 `basic.md`，不覆盖已有文件。
+4. 写入版本为 1 的初始化记录；不应用人格、不切换默认预设。
 
-Client 解包两层结果：外层为 Remote 的 `{ok, value}`，业务失败在内层以 `{ok:false, code, message}` 表达。服务的 `_guard` 统一把业务异常转为该失败对象；成功结果各方法不同，并非全部包含 `ok`。
+删除基础人格不触发重建；删除整个目录与记录才视为全新安装。`list` / `compose` 保持只读，可在无目录时返回空结果；初始化失败会记录诊断，仍能浏览可读文件。
 
-## 3. 人设文件与导入
+人设 ID 保留 Unicode，最长 120 字符，禁止路径分隔符、Windows 保留字符与设备名。重名后缀计入长度限制。写操作校验 body、enabled、排序等类型；临时文件用唯一名称与独占创建后 rename。文件符号链接和目录不能充当人设/状态文件。
 
-默认目录由 [cordis.patch.yml](<../cordis.patch.yml>) 中的 `!!js dshHomePath('xiaoxing', 'personas')` 提供。入口在缺少显式目录时尝试 `process.env.DSH_HOME`，未把 `profileContext.home` 传入配置解析函数。
+Frontmatter 仍为扁平字段，未知键编辑时保留；正文不自动改写措辞，但会清理开头空行并补结尾换行。组合时只取启用的非空正文，按 slot / order / name 排序，trim 后以两个换行连接。
 
-每个人设为一个 `<id>.md`，frontmatter 字段包括 name、description、slot、order、enabled、sourceFormat、sourceFile、importedAt、emoji。文件 ID 保留 Unicode，剔除路径分隔符和 Windows 保留字符；显式 ID 必须是安全的单个文件名段。
+## 3. Remote 与错误
 
-文件按槽位、order、name 排序。组合时只取启用且正文非空的文件，对各正文 `trim()` 后用两个换行连接，返回 `{text, used, count}`。
+`xiaoxingPersona` 实例上有 `typertRemote` 绑定，原型上有 Remote 方法标记；每个 Remote 方法使用简单 `request` 参数。Host `remove` 的 wire 名为 `delete`，避免与客户端命名空间冲突。
 
-保存器保留未知 frontmatter 字段，不改写正文措辞；但会去掉正文开头空行并补上结尾换行，不承诺字节级保真。文件与状态写入经同一个服务队列串行，写到同目录临时文件后 rename。
+Client 通过 `ctx.get('remote.xiaoxingPersona')` 访问，解包 Remote 与业务两层结果。业务失败为 `{ok:false, code, message}`。损坏 JSON 报 `invalid-state`，不把坏文件静默替换成空状态。
 
-导入识别：
+Remote 挂载失败仍注册设置页错误入口。刷新不会吞掉刚发生的操作错误；缺服务不是永久 loading，也不是“目录没有文件”。已应用快照与当前组合有独立预览来源。
 
-- OpenClaw：SOUL → voice；IDENTITY → identity；AGENTS → instructions，默认停用。用户画像、记忆、技能与运行配置不导入。
-- Hermes SOUL：voice，名称取文件所在目录名。
-- Hermes profile：读取 distribution 中的 name / version / description，version 只用于缺省描述；不保存 author 字段。
-- Hermes YAML：personalities → overlay，当前选择项启用；system_prompt → instructions，默认停用。
-- 通用 Markdown：voice，名称取一级标题或文件名。
+`status` 区分覆盖偏好、实际覆盖、应用快照是否加载、待应用修改、首次创建与可用能力。不存在的导航能力只禁用 AI 操作；跳转失败保留面板并显示已创建的会话 ID。
 
-YAML 解析器只实现所需子集，失败返回带位置的错误。疑似指令覆盖或零宽字符只产生告警。导入返回 `{ok, format, created, skipped, warnings}`。
+## 4. 应用事务与覆盖所有权
 
-## 4. 应用与恢复
+应用创建同名运行时预设，不自动选中默认模式，也不改变已开始会话的版本。
 
-应用是注册同名 Agent 预设，不是写入全局 deployment 人格。
+1. 校验正文/模板组、宿主服务、标准预设模板与应用快照。
+2. 查名册时只排除本插件拥有的旧应用预设，不吞名册失败；ID 与名称来自首个参与组合文件。
+3. 计算完整配置计划，限定四个内置行：`preset-standard` / `preset-ptc` / `preset-minimal` / `preset-cordis`。
+4. 只有存在不同于 inherited 的非空部署级人格时才要求 `clearDeployment`。无用户部署人格的出厂配置不需要确认，也不写 `system-prompt`。
+5. 注销旧应用注册，再注册候选；`register` 可返回 broken 预设，因此用户应用路径还通过 `resolve` 检查可用性。
+6. 按计划调用 `configEditor.edit`；在修改点重新取当前行，拒绝被替换的快照。
+7. 最后提交 `.applied.json`。此前任意失败恢复旧注册与已尝试的配置；回滚只覆盖仍等于本次输出的配置，外部修改保留。恢复失败明确报 `rollback-failed`。
 
-1. 组合正文。空内容默认拒绝；只有显式 `allowEmpty` 才注销人格预设并移除应用记录。
-2. 检测 `{{...}}` 模板组。`force` 只跳过此检查，不能保证严格模板插值成功。
-3. **先注销旧预设，再查找可用 ID**，避免把上一次的自身注册误判为撞名。ID 与名称来自首个启用且有正文的文件；撞名时追加 `-persona-N`。
-4. 从 `configEditor.configuration()` 读取 `preset-standard` 的已求值 inherited config，以其插件列表为模板，把原生 persona 行的 prefix 替换为正文；无需手写宿主预设的工具列表。
-5. `agentPresets.register` 注册运行时预设（order 90），保存 disposer。新会话可选用；不自动切换默认模式或已开始的会话。
-6. 读取 `settings.json` 中的覆盖开关。当前实现遍历所有可寻址且含 persona 行的 Agent 预设：开时替换 prefix，关时只还原 persona 行配置，保留其他子行自定义。
-7. 把 `system-prompt` 行还原为 inherited config，清掉部署级用户人格。**整行还原也会移除该行其他覆盖项。**
-8. 保存 `.applied.json`，包括 presetId、name、text、files、overrideBuiltIn、appliedAt。
+覆盖开时保存四个预设的原始 persona 配置，只写 prefix。重复应用保留原基线；用户在其他入口改了 prefix 后，再次明确覆盖则捕获新的基线。关时仅恢复仍等于本插件上次输出的 prefix，保留当前 suffix / complete / includeRuntimeContext 和其他子行；从未由本插件覆盖的预设不动。
 
-Config Editor 的 `edit` 接收完整配置。当返回值与 inherited 等价时，宿主可删除多余的 profile 覆盖行；不直接改写 profile YAML。
+部署级移除也是字段级：只把用户 personaPrefix / personaSuffix 恢复为 inherited 值，保留宿主基础 coding prompt、toolOrder 等其他设置。不会写空字符串去抹掉宿主默认说明。
 
-Bootstrap 在 `agentPresets` 服务可用时执行：注册 AI 编辑预设，并从应用快照恢复人格预设。恢复使用快照 text，不重新组合编辑后尚未应用的文件。
+应用记录兼容旧版未带版本字段的快照，新记录为 version 1，并含 builtInOriginals。覆盖偏好仅保存选择，下一次 Apply 才改变配置；状态显示实际结果，不以选择值冒充生效。
 
-禁用插件时运行时预设注销，但文件与快照保留。原生 profile 中已写入的覆盖不随插件禁用消失；关闭覆盖开关后再次应用才还原。`setOverrideBuiltIn` 仅持久化选择，不即时执行覆盖。
+## 5. 预设启动与卸载
 
-## 5. AI 编辑会话
+`ctx.inject` 自己拥有 child Fiber，不能把返回的 Fiber 当作 `ctx.effect` disposer。启动恢复进服务队列，避免与用户 apply 并发。
 
-`aiEdit` 可编辑指定文件，也可在未指定 ID 时辅助新建：
+Bootstrap 从 `.applied.json` 恢复原快照，不重新组合尚未应用的文件；AI 编辑模板来自内置 minimal 的 inherited 配置。Bootstrap 不等待可能依赖全局 Loader 完成的诊断，用户操作与状态查询再检查 broken。
 
-```text
-sessionController.create（首个工作区）
-  → resolveAgent
-  → agentPresets.select('xiaoxing-ai-edit')
-  → agent.followup（用户消息）
-  → sessions.flush（服务可用时）
-  → Client 跳转到新会话
-```
+卸载首先关闭操作准入，等待在途队列，再等待每个注册 disposer。卸载期间晚到的注册立即释放；不清空 map 后放任异步注册重新写回。没有按 ID 强行注销其他插件预设的路径。
 
-`xiaoxing-ai-edit` 的模板来自内置 `preset-minimal` 的 inherited config（order 91）。它保留基础助理说明，但不携带已应用的用户人设。选择失败返回 `select-failed`，不回退到带用户人设的会话。
+同名预设禁用后不再供新会话选择，文件与快照保留。原生 profile 覆盖不会因插件禁用自动消失，需明确关闭覆盖后再次应用。
 
-首条消息携带待编辑正文、存储格式约束、可选修改要求，要求只改正文、不引入模板组、完成后不自动应用。这里的正文属于编辑材料，提交为用户消息，不是会话系统人设。
+## 6. AI 编辑与导入边界
 
-## 6. 业务接口
+AI 编辑先检查本插件拥有的 `xiaoxing-ai-edit`，再调用 `sessionController.create({agentPreset: 'xiaoxing-ai-edit', ...})`。不先按默认用户人格建会话再尝试 select。正文为用户消息中的编辑材料，不是系统人格；未保存的既有正文要求先保存，新建草稿可携带参考。
 
-| Host 方法 | request | 成功结果 |
-|---|---|---|
-| `list` | `{}` | `{files}`，不含正文 |
-| `read` | `{id}` | `{file}`，含正文 |
-| `write` | `{id?, name?, description?, slot?, order?, enabled?, emoji?, body}` | `{file}` |
-| `remove` / wire `delete` | `{id}` | `{ok, id}` |
-| `toggle` | `{id, enabled}` | `{file}` |
-| `import` | `{path, format?}` | `{ok, format, created, skipped, warnings}` |
-| `compose` | `{}` | `{text, used, count}` |
-| `apply` | `{force?, allowEmpty?}` | `{ok, mode, presetId, presetName, appliedPrefix, overrideBuiltIn, deploymentCleared, overridden, restored, failures}` |
-| `status` | `{}` | 目录与文件数量、应用快照、覆盖状态、部署人格、canApply |
-| `aiEdit` | `{id?, instruction?}` | `{ok, sessionId}` |
-| `setOverrideBuiltIn` | `{enabled}` | `{ok, overrideBuiltIn}` |
+`agent.followup` 入队后可调用 `sessions.flush`；false 表示没有持久化监听器，不是失败，只有拒绝才报错。已有会话不会被自动应用人格。
 
-模型工具只有 `status` / `list` / `read` / `write` / `remove` / `toggle` / `import` / `compose` / `apply` 九种 action。参数使用原生 JSON Schema，包括 emoji、force、allowEmpty；`execute(args)` 调用相同业务方法。工具返回 `{ok, summary, data?}`，摘要作为模型可见文本渲染。
+导入支持 OpenClaw、Hermes 与通用 Markdown，规则见 [README](<../README.md>)。统一使用普通文件与有界字节读取，默认每文件 1 MiB（可配置）。隐藏配置文件与私有 DSH 状态拒绝导入。模型工具的导入还限定请求会话工作目录或人格目录，真实路径必须仍在范围内；外部来源由设置页的用户显式选择。
 
-## 7. 验证与已知边界
+YAML 为所需子集，不是完整 YAML；解析失败返回位置。疑似注入只告警，不保证任意外部人设可信。插件与预设不是安全沙箱，导入设定应由用户审阅。
 
-当前代码在纳入 Git 前已完成 DSH 设置页、人设编辑与导入、同名预设重复应用、AI 编辑不带用户人设、覆盖开关、重启恢复的人工验证。具体私人数据与人设名不纳入验证文档。
+## 7. 业务接口
 
-仓库初始化后的检查范围见 [CONTRIBUTING.md](<../CONTRIBUTING.md>)。当前没有自动化行为测试；语法与文件检查不代表 Remote、渲染或宿主升级验证通过。
+| 方法 | request / 特点 |
+|---|---|
+| list / read / write / remove / toggle | 文件操作，返回文件投影或明确失败 |
+| import | `{path, format?}`，返回 created / skipped / warnings |
+| compose | `{}`，返回 text / used / count，不应用 |
+| apply | `{force?, allowEmpty?, clearDeployment?}`，返回实际预设、覆盖/恢复/跳过与部署移除结果 |
+| status | `{}`，返回快照与 canApply / canAiEdit / needsApply 等实际状态 |
+| aiEdit | `{id?, instruction?}`，返回新会话 ID |
+| setOverrideBuiltIn | `{enabled}`，只保存覆盖选择 |
 
-- 依赖宿主内置行 ID `preset-standard` / `preset-minimal`；模板缺失时相关预设能力不可用。
-- 覆盖遍历范围不限定为固定四个内置模式，部署级还原是整行配置还原。
-- 组合文本是严格模板输入，强制应用含模板组的正文仍可能在运行时失败。
-- 不负责选择 IM 插件的默认预设；其他插件需通过 DSH 原生预设名册显式选用。
-- 人设与应用快照属于用户私有数据；Git 管理的是插件源码，不是这些数据的备份。
+模型工具有九种 action，不提供 AI 开会话或覆盖开关授权；结果为 `{ok, summary, data?}`。工具描述精简为用途与关键行为，导入范围和清空约束放在参数上。
 
-许可与作者见仓库 [LICENSE](<../LICENSE>) 和 [package.json](<../package.json>)。
+## 8. 检查范围
+
+当前有 42 项隔离测试：31 项生命周期/CRUD/事务，8 项导入与状态，3 项 Client 注册。注册测试不创建模拟页面，也不能替代真实视觉与点击验证。测试目录均为可识别、可清理的临时目录，不操作真实用户人设。
+
+[维护约定](<../CONTRIBUTING.md>)规定包检查、测试、Git 检查与真实 DSH 验证分开记录。正式上传/发布不在本轮自动化步骤中，`private` 保护与远程目标保持待用户确认。

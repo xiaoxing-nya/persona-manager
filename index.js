@@ -12,8 +12,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 /** Cordis service key and Remote namespace of the persona service. */
 const SERVICE_KEY = 'xiaoxingPersona'
@@ -53,7 +54,7 @@ const SOURCE_FORMATS = Object.freeze([
   'hermes-profile-distribution', 'markdown',
 ])
 /** Strict `{{...}}` groups the native persona template would interpolate. */
-const TEMPLATE_GROUP_PATTERN = /\{\{[^{}\n]*\}\}/
+const TEMPLATE_GROUP_PATTERN = /\{\{[\s\S]*?\}\}/u
 /** Registry id of the persona-free preset AI-edit sessions switch to. */
 const AI_EDIT_PRESET_ID = 'xiaoxing-ai-edit'
 /** Display name of the AI-edit preset in the mode roster. */
@@ -64,12 +65,19 @@ const PERSONA_PRESET_SOURCE_ROW = 'preset-standard'
 const AI_EDIT_PRESET_SOURCE_ROW = 'preset-minimal'
 /** Roster order of the persona preset; shipped presets use 1-4. */
 const PERSONA_PRESET_ORDER = 90
-/** Roster order of the AI-edit preset. */
-const AI_EDIT_PRESET_ORDER = 91
 /** Persisted apply record, below the persona directory. */
 const APPLIED_FILENAME = '.applied.json'
 /** Persisted override switch, below the persona directory. */
 const SETTINGS_FILENAME = 'settings.json'
+/** One-time onboarding record; deleting a persona must not recreate it. */
+const INITIALIZED_FILENAME = '.initialized.json'
+/** Packaged, minimal starter persona, copied only into a fresh empty directory. */
+const DEFAULT_PERSONA_URL = new URL('./defaults/basic.md', import.meta.url)
+const DEFAULT_PERSONA_ID = 'basic'
+/** Only the four shipped preset rows participate in the opt-in override. */
+const BUILT_IN_PRESET_ROWS = Object.freeze(['preset-standard', 'preset-ptc', 'preset-minimal', 'preset-cordis'])
+/** Windows device names are not ordinary persona filenames. */
+const RESERVED_ID_PATTERN = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu
 /** Characters Windows forbids in a file name, plus every control character. */
 const UNSAFE_ID_CHARS = /[\\/:*?"<>|\u0000-\u001f\u007f]/gu
 /** Single-match form of the same class, used to validate one id. */
@@ -118,7 +126,8 @@ function idFromName(name) {
     .replace(/\s+/gu, '-')
     .replace(/^[.\s-]+/u, '')
     .replace(/[.\s-]+$/u, '')
-  return cleaned.slice(0, MAX_ID_LENGTH)
+  const safe = RESERVED_ID_PATTERN.test(cleaned) ? `persona-${cleaned}` : cleaned
+  return safe.slice(0, MAX_ID_LENGTH).replace(/[. ]+$/u, '')
 }
 
 /**
@@ -131,9 +140,17 @@ function isSafeId(id) {
     && id.length > 0
     && id.length <= MAX_ID_LENGTH
     && !UNSAFE_ID_PATTERN.test(id)
+    && !RESERVED_ID_PATTERN.test(id)
     && id !== '.'
     && id !== '..'
     && !/[. ]$/u.test(id)
+}
+
+/** Whether a canonical path is inside one configured directory. */
+function withinDirectory(path, directory) {
+  if (directory === '') return false
+  const part = relative(directory, path)
+  return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
 }
 
 /** Compare two persona records by slot, order, then name. */
@@ -247,7 +264,10 @@ function normalizeMeta(meta, fallbackName) {
 /** Read and parse one persona file from disk. */
 async function readPersonaFile(dir, fileName) {
   const path = join(dir, fileName)
-  const info = await stat(path)
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new PersonaError('unsafe-file', `persona file must be a regular file, not a link or directory: ${fileName}`)
+  }
   const text = await readFile(path, 'utf8')
   const parsed = parsePersonaFile(text)
   const id = basename(fileName, extname(fileName))
@@ -626,7 +646,12 @@ class PersonaService {
   constructor(deps) {
     this.deps = deps
     this.queue = Promise.resolve()
-    this.tmpCounter = 0
+    this.initialized = false
+    this.initialization = null
+    this.initializationError = null
+    this.closed = false
+    this.presetDefinitions = new Map()
+    this.bootstrapErrors = {}
     this.sessionDeps = undefined
     /** Registry disposers of presets this service registered, by preset id. */
     this.presetDisposers = new Map()
@@ -639,10 +664,53 @@ class PersonaService {
     })
   }
 
+  /** Admit model imports only within the session workspace or persona directory. */
+  async authorizeModelImport(rawPath, agent) {
+    if (typeof rawPath !== 'string' || rawPath.trim() === '') throw new PersonaError('invalid-path', 'an import path is required')
+    const root = this.deps.getImportRoot?.(agent)
+    if (typeof root !== 'string' || root === '') throw new PersonaError('import-access', 'model imports require a session workspace; use the settings page to import external persona files')
+    const source = resolve(root, rawPath.trim())
+    const allowed = [resolve(root), this.deps.personaDir].filter(Boolean)
+    if (!allowed.some(dir => withinDirectory(source, dir))) throw new PersonaError('import-access', 'the import is outside the session workspace; use the settings page for external sources')
+    const canonical = await realpath(source)
+    const canonicalRoots = await Promise.all(allowed.map(dir => realpath(dir).catch(error => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })))
+    if (!canonicalRoots.some(dir => dir !== null && withinDirectory(canonical, dir))) throw new PersonaError('import-access', 'the import link points outside the permitted directories')
+    return canonical
+  }
+
+  /** Read a regular import file with a bounded byte budget. */
+  async _readImportFile(source) {
+    if (basename(source).startsWith('.')) throw new PersonaError('import-access', 'hidden configuration files are not persona import sources')
+    const info = await lstat(source)
+    if (!info.isFile() || info.isSymbolicLink()) throw new PersonaError('unsafe-file', 'import sources must be regular files')
+    const canonical = await realpath(source)
+    if (this.deps.dshHome !== '' && withinDirectory(canonical, this.deps.dshHome) && !withinDirectory(canonical, this.deps.personaDir)) {
+      throw new PersonaError('import-access', 'private harness state is not a persona import source')
+    }
+    const limit = this.deps.maxImportBytes
+    if (info.size > limit) throw new PersonaError('import-too-large', `import file exceeds ${limit} bytes`)
+    const handle = await open(canonical, 'r')
+    try {
+      const buffer = Buffer.alloc(limit + 1)
+      let size = 0
+      while (size < buffer.length) {
+        const result = await handle.read(buffer, size, buffer.length - size, null)
+        if (result.bytesRead === 0) break
+        size += result.bytesRead
+      }
+      if (size > limit) throw new PersonaError('import-too-large', `import file exceeds ${limit} bytes`)
+      return buffer.subarray(0, size).toString('utf8')
+    } finally {
+      await handle.close()
+    }
+  }
+
   /** Resolve the Session-creation services lazily; the plugin stays usable without them. */
   _sessionDeps() {
-    this.sessionDeps ??= this.deps.getSessionDeps()
-    return this.sessionDeps
+    return this.deps.getSessionDeps()
   }
 
   /** List every persona file. */
@@ -651,7 +719,7 @@ class PersonaService {
       const dir = this.deps.personaDir
       const files = dir === '' ? [] : await this._listFiles(dir)
       return { files: files.map(summarizePersonaFile) }
-    }))
+    }, false))
   }
 
   /** Read one persona file including its body. */
@@ -669,6 +737,11 @@ class PersonaService {
   async write(request) {
     return this._guard('write', () => this._serialize(async () => {
       const req = asRequest(request)
+      if (req.id !== undefined && typeof req.id !== 'string') throw new PersonaError('invalid-id', 'id must be a string')
+      if (req.name !== undefined && typeof req.name !== 'string') throw new PersonaError('invalid-name', 'name must be a string')
+      if (req.enabled !== undefined && typeof req.enabled !== 'boolean') throw new PersonaError('invalid-enabled', 'enabled must be a boolean')
+      if (req.description !== undefined && typeof req.description !== 'string') throw new PersonaError('invalid-description', 'description must be a string')
+      if (req.emoji !== undefined && typeof req.emoji !== 'string') throw new PersonaError('invalid-emoji', 'emoji must be a string')
       const body = typeof req.body === 'string' ? req.body : ''
       if (body.trim() === '') throw new PersonaError('invalid-body', 'body must be a non-empty string')
       const dir = await this._ensureDir()
@@ -765,7 +838,7 @@ class PersonaService {
 
   /** Compose every enabled persona file into one text. */
   async compose(request) {
-    return this._guard('compose', () => this._serialize(() => this._compose()))
+    return this._guard('compose', () => this._serialize(() => this._compose(), false))
   }
 
   /**
@@ -788,60 +861,82 @@ class PersonaService {
         )
       }
       const editor = this.deps.getEditor()
-      if (editor === undefined || editor === null) {
-        throw new PersonaError('no-editor', 'the configEditor service is unavailable in this profile')
-      }
+      if (editor === undefined || editor === null) throw new PersonaError('no-editor', 'the configEditor service is unavailable in this profile')
       const registry = this._agentPresets()
       const overrideBuiltIn = await this._readOverrideSetting()
-      let presetId = ''
-      let presetName = ''
-      if (text.trim() === '') {
-        // allowEmpty: retire the applied preset entirely.
-        await this._disposeAppliedPreset()
-        await this._removeAppliedRecord()
-      } else {
-        const primary = await this._primaryFile()
-        // Retire the previous registration first: its roster slot must not
-        // count as a clash when deriving the new preset id.
-        await this._disposeAppliedPreset()
-        presetId = await this._uniquePresetId(registry, primary.id)
-        presetName = primary.name
+      const previousRecord = await this._readAppliedRecord()
+      const previousDefinition = this.presetDefinitions.get(this.appliedPresetId)
+      const clearing = text.trim() === ''
+      let definition = null
+      if (!clearing) {
+        // Complete all validation before retiring a working preset.
         const template = this._presetTemplate(editor, PERSONA_PRESET_SOURCE_ROW)
-        if (template === null) {
-          throw new PersonaError(
-            'no-template',
-            `the shipped row ${JSON.stringify(PERSONA_PRESET_SOURCE_ROW)} is not addressable; cannot template the persona preset`,
-          )
-        }
-        const disposer = await registry.register({
-          id: presetId,
-          name: presetName,
+        if (template === null) throw new PersonaError('no-template', 'the shipped standard preset template is unavailable')
+        const primary = await this._primaryFile()
+        definition = {
+          id: await this._uniquePresetId(registry, primary.id),
+          name: primary.name,
           description: `小星Bot 人格预设（${composed.count} 个设定文件）`,
           order: PERSONA_PRESET_ORDER,
           plugins: withPersonaPrefix(template.plugins, text),
-        })
-        this.presetDisposers.set(presetId, disposer)
-        this.appliedPresetId = presetId
-        await this._writeAppliedRecord({
-          presetId,
-          name: presetName,
+        }
+      }
+      const plan = this._planApplication(editor, text, overrideBuiltIn && !clearing, previousRecord)
+      if (plan.deploymentCleared && req.clearDeployment !== true) {
+        throw new PersonaError('deployment-persona', 'applying requires clearing the deployment persona prefix and suffix; confirm with clearDeployment to keep AI editing free of user persona')
+      }
+      const attempted = []
+      try {
+        await this._disposeAppliedPreset()
+        if (definition !== null) {
+          await this._registerPreset(registry, definition)
+          this.appliedPresetId = definition.id
+        }
+        for (const update of plan.updates) {
+          if (this.closed) throw new PersonaError('disposed', 'the persona service was unloaded during apply')
+          attempted.push(update)
+          await this._editConfig(editor, update)
+        }
+        if (this.closed) throw new PersonaError('disposed', 'the persona service was unloaded before apply committed')
+        // The snapshot is the last commit point: failed earlier steps preserve it.
+        if (clearing) await this._removeAppliedRecord()
+        else await this._writeAppliedRecord({
+          version: 1,
+          presetId: definition.id,
+          name: definition.name,
           text,
           files: composed.used,
           overrideBuiltIn,
+          builtInOriginals: plan.originals,
           appliedAt: nowIso(),
         })
+        delete this.bootstrapErrors.applied
+      } catch (error) {
+        const rollbackErrors = await this._rollbackConfigs(editor, attempted)
+        try {
+          await this._disposeAppliedPreset()
+          if (previousDefinition !== undefined && !this.closed) {
+            await this._registerPreset(registry, previousDefinition)
+            this.appliedPresetId = previousDefinition.id
+          }
+        } catch (rollbackError) {
+          rollbackErrors.push(messageOf(rollbackError))
+        }
+        if (rollbackErrors.length > 0) throw new PersonaError('rollback-failed', `apply failed: ${messageOf(error)}; recovery also failed: ${rollbackErrors.join('; ')}; inspect the current preset and configuration before retrying`)
+        throw error
       }
-      const builtIn = await this._applyBuiltInPresets(editor, text.trim() === '' ? '' : text, overrideBuiltIn)
-      const deploymentCleared = await this._clearDeploymentPersona(editor)
       return {
         ok: true,
         mode: 'preset',
-        presetId,
-        presetName,
+        presetId: definition?.id ?? '',
+        presetName: definition?.name ?? '',
         appliedPrefix: text,
         overrideBuiltIn,
-        deploymentCleared,
-        ...builtIn,
+        deploymentCleared: plan.deploymentCleared,
+        overridden: plan.overridden,
+        restored: plan.restored,
+        skipped: plan.skipped,
+        failures: [],
       }
     }))
   }
@@ -865,39 +960,63 @@ class PersonaService {
       const registry = this.deps.getAgentPresets()
       const applied = await this._readAppliedRecord()
       const overrideBuiltIn = await this._readOverrideSetting()
-      const appliedText = applied !== null && typeof applied.text === 'string' ? applied.text : ''
-      let builtInOverridden = false
-      const deploymentPersona = editor === undefined || editor === null ? '' : this._appliedPrefix(editor, 'deployment', SYSTEM_PROMPT_ENTRY_ID)
-      if (editor !== undefined && editor !== null && appliedText !== '') {
-        try {
-          for (const row of editor.configuration()) {
-            const config = rowConfig(row)
-            const plugins = Array.isArray(config.plugins) ? config.plugins : []
-            const persona = plugins.find(item => item !== null && typeof item === 'object' && item.name === PERSONA_PLUGIN_NAME)
-            if (typeof persona?.config?.prefix === 'string' && persona.config.prefix === appliedText) builtInOverridden = true
-          }
-        } catch { /* detection is best-effort */ }
+      const appliedText = applied?.text ?? ''
+      const rows = editor == null ? [] : editor.configuration()
+      const builtInOverridden = appliedText !== '' && rows.some(row => {
+        if (!BUILT_IN_PRESET_ROWS.includes(row?.entry?.options?.id)) return false
+        const persona = rowConfig(row).plugins?.find(item => item?.name === PERSONA_PLUGIN_NAME)
+        return persona?.config?.prefix === appliedText
+      })
+      const deployment = rows.find(row => row?.entry?.options?.id === SYSTEM_PROMPT_ENTRY_ID)
+      const deploymentPersona = this._deploymentChange(deployment)?.text ?? ''
+      let appliedAvailable = false
+      let presetError = this.bootstrapErrors.applied ?? null
+      let aiError = this.bootstrapErrors.ai ?? null
+      if (registry != null && applied !== null && this.presetDisposers.has(applied.presetId)) {
+        try { await this._checkPreset(registry, applied.presetId); appliedAvailable = true; presetError = null }
+        catch (error) { presetError = { code: error.code ?? 'preset-failed', message: messageOf(error) } }
       }
+      let aiAvailable = false
+      if (registry != null && this.presetDisposers.has(AI_EDIT_PRESET_ID)) {
+        try { await this._checkPreset(registry, AI_EDIT_PRESET_ID); aiAvailable = true; aiError = null }
+        catch (error) { aiError = { code: error.code ?? 'preset-failed', message: messageOf(error) } }
+      }
+      const canApplyReason = dir === '' ? 'no-home' : editor == null ? 'no-editor' : registry == null ? 'no-registry'
+        : this.initializationError?.code ?? (this._presetTemplate(editor, PERSONA_PRESET_SOURCE_ROW) === null ? 'no-template' : '')
+      const canAiEditReason = dir === '' ? 'no-home' : this._sessionDeps().controller == null ? 'no-controller'
+        : !aiAvailable ? (aiError?.code ?? 'preset-failed') : ''
+      const enabled = files.filter(file => file.enabled && file.body.trim() !== '')
+      const needsApply = enabled.map(file => file.body.trim()).join('\n\n') !== appliedText
+        || (applied !== null && (enabled[0]?.name !== applied.name || !isDeepStrictEqual(enabled.map(file => file.id), applied.files)
+          || applied.overrideBuiltIn !== overrideBuiltIn))
       return {
         mode: 'preset',
         personaDir: dir,
         files: files.length,
         enabledFiles: files.filter(file => file.enabled).length,
         applied: applied === null ? null : {
-          presetId: typeof applied.presetId === 'string' ? applied.presetId : '',
-          name: typeof applied.name === 'string' ? applied.name : '',
+          presetId: applied.presetId,
+          name: applied.name,
           chars: appliedText.length,
-          files: Array.isArray(applied.files) ? applied.files : [],
+          files: applied.files,
           overrideBuiltIn: applied.overrideBuiltIn === true,
-          appliedAt: typeof applied.appliedAt === 'string' ? applied.appliedAt : '',
+          appliedAt: applied.appliedAt,
+          available: appliedAvailable,
         },
         appliedText,
         overrideBuiltIn,
         builtInOverridden,
         deploymentPersona,
-        canApply: editor !== undefined && editor !== null && registry !== undefined && registry !== null,
+        canApply: canApplyReason === '',
+        canApplyReason,
+        canAiEdit: canAiEditReason === '',
+        canAiEditReason,
+        needsApply,
+        starterCreated: this.initialization?.createdDefault === true && files.some(file => file.id === DEFAULT_PERSONA_ID),
+        initializationError: this.initializationError,
+        presetError,
       }
-    }))
+    }, false))
   }
 
   /**
@@ -919,25 +1038,26 @@ class PersonaService {
       if (controller === undefined || controller === null) {
         throw new PersonaError('no-controller', 'the sessionController service is unavailable in this profile')
       }
+      const registry = this._agentPresets()
+      if (!this.presetDisposers.has(AI_EDIT_PRESET_ID)) throw new PersonaError('preset-failed', 'the clean AI editing preset is not available')
+      await this._checkPreset(registry, AI_EDIT_PRESET_ID)
       const sessionId = `session-${randomUUID()}`
-      const created = await controller.create({
-        sessionId,
-        ...this._defaultWorkspaceRequest(),
-      })
+      let created
+      try {
+        created = await controller.create({
+          sessionId,
+          agentPreset: AI_EDIT_PRESET_ID,
+          ...this._defaultWorkspaceRequest(),
+        })
+      } catch (error) {
+        throw new PersonaError('agent-failed', `could not create the clean AI editing session: ${messageOf(error)}`)
+      }
       const resolved = await controller.resolveAgent(created.sessionId)
       if (resolved === null || typeof resolved !== 'object' || !('agent' in resolved)) {
         const detail = resolved !== null && typeof resolved === 'object' && 'error' in resolved ? messageOf(resolved.error) : 'unknown failure'
         throw new PersonaError('agent-failed', `could not activate the new session: ${detail}`)
       }
       const agent = resolved.agent
-      // AI-edit sessions must not carry the applied persona: switch the fresh
-      // session to the persona-free preset this plugin registers at bootstrap.
-      const registry = this._agentPresets()
-      try {
-        await registry.select(agent, AI_EDIT_PRESET_ID)
-      } catch (error) {
-        throw new PersonaError('select-failed', `could not switch the AI session to the persona-free preset: ${messageOf(error)}`)
-      }
       const message = {
         id: randomUUID(),
         role: 'user',
@@ -947,8 +1067,11 @@ class PersonaService {
       agent.followup(message)
       const sessions = this._sessionDeps().sessions
       if (sessions !== undefined && sessions !== null) {
-        const flushed = await sessions.flush(agent.session)
-        if (flushed !== true) throw new PersonaError('flush-failed', 'session persistence did not acknowledge the message')
+        try {
+          await sessions.flush(agent.session)
+        } catch (error) {
+          throw new PersonaError('flush-failed', `could not flush the AI editing session: ${messageOf(error)}`)
+        }
       }
       return { ok: true, sessionId: created.sessionId }
     }))
@@ -967,9 +1090,54 @@ class PersonaService {
     }
   }
 
-  /** Serialize one operation behind the single-file queue. */
-  _serialize(task) {
-    const run = this.queue.then(task, task)
+  /** Initialize the data directory without applying or replacing any persona. */
+  initialize() {
+    return this._serialize(() => this.initialization).catch(error => {
+      this.initializationError = { code: error.code ?? 'initialization-failed', message: messageOf(error) }
+      throw error
+    })
+  }
+
+  /** Seed the starter only once, and only when no previous data exists. */
+  async _initializeOnce() {
+    if (this.initialized) return
+    const dir = await this._ensureDir()
+    const marker = await this._readJson(INITIALIZED_FILENAME, null)
+    if (marker !== null) {
+      if (marker === null || typeof marker !== 'object' || marker.version !== 1 || typeof marker.createdDefault !== 'boolean') {
+        throw new PersonaError('invalid-state', 'invalid initialization record; preserve it and repair the data directory before continuing')
+      }
+      this.initialization = marker
+      this.initialized = true
+      this.initializationError = null
+      return
+    }
+    const names = await readdir(dir)
+    const existing = names.length > 0
+    let createdDefault = false
+    if (!existing) {
+      const template = await readFile(DEFAULT_PERSONA_URL, 'utf8')
+      try {
+        await writeFile(join(dir, `${DEFAULT_PERSONA_ID}.md`), template, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+        createdDefault = true
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+      }
+    }
+    const record = { version: 1, createdDefault, defaultPersonaId: DEFAULT_PERSONA_ID }
+    await this._writeJson(INITIALIZED_FILENAME, record)
+    this.initialization = record
+    this.initialized = true
+    this.initializationError = null
+  }
+
+  /** Serialize startup, user operations and preset recovery in one lifecycle. */
+  _serialize(task, initialize = true) {
+    const run = this.queue.then(async () => {
+      if (this.closed) throw new PersonaError('disposed', 'the persona service was unloaded; reopen the settings page after reload')
+      if (initialize) await this._initializeOnce()
+      return task()
+    })
     this.queue = run.then(() => undefined, () => undefined)
     return run
   }
@@ -1050,7 +1218,8 @@ class PersonaService {
     let candidate = root
     let suffix = 2
     while (await this._exists(dir, candidate)) {
-      candidate = `${root}-${suffix}`
+      const ending = `-${suffix}`
+      candidate = `${root.slice(0, MAX_ID_LENGTH - ending.length)}${ending}`
       suffix += 1
     }
     return candidate
@@ -1058,10 +1227,15 @@ class PersonaService {
 
   /** Replace one file atomically: write a sibling temporary file, then rename. */
   async _writeAtomic(path, content) {
-    this.tmpCounter += 1
-    const temporary = `${path}.tmp-${process.pid}-${this.tmpCounter}`
+    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`
     try {
-      await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 })
+      try {
+        const existing = await lstat(path)
+        if (!existing.isFile() || existing.isSymbolicLink()) throw new PersonaError('unsafe-file', 'refusing to replace a link or directory with persona data')
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
       await rename(temporary, path)
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => {})
@@ -1086,8 +1260,8 @@ class PersonaService {
   /** Validate a caller-supplied order. */
   _requireOrder(value) {
     const order = Number(value)
-    if (!Number.isFinite(order)) throw new PersonaError('invalid-order', 'order must be a finite number')
-    return Math.trunc(order)
+    if (!Number.isFinite(order) || !Number.isInteger(order)) throw new PersonaError('invalid-order', 'order must be a finite integer')
+    return order
   }
 
   /** Read the addressable config rows, tolerating a missing editor. */
@@ -1157,12 +1331,9 @@ class PersonaService {
 
   /** One free preset id derived from a persona file id, avoiding roster clashes. */
   async _uniquePresetId(registry, fileId) {
-    let taken = []
-    try {
-      taken = (await registry.list()).map(row => String(row?.id ?? ''))
-    } catch {
-      taken = []
-    }
+    const rows = await registry.list()
+    const taken = rows.map(row => String(row?.id ?? '')).filter(id =>
+      !(id === this.appliedPresetId && this.presetDisposers.has(id)))
     const base = isSafeId(fileId) ? fileId : 'persona'
     let candidate = base
     let suffix = 2
@@ -1188,62 +1359,111 @@ class PersonaService {
     return structuredClone(inherited)
   }
 
-  /**
-   * Override or restore the persona rows of every addressable agent preset.
-   * Restoring maps each persona row back to its inherited config, which the
-   * config editor collapses into a removed profile override when nothing else
-   * differs, so shipped presets return to their bundled declaration.
-   */
-  async _applyBuiltInPresets(editor, text, override) {
+  /** Plan narrowly owned native changes, preserving unrelated user settings. */
+  _planApplication(editor, text, override, previousRecord) {
+    const rows = editor.configuration()
+    if (!Array.isArray(rows)) throw new PersonaError('no-editor', 'the configuration directory is unavailable')
+    const updates = []
     const overridden = []
     const restored = []
-    const failures = []
-    const entries = this._editorEntries(editor)
-    for (const candidate of entries) {
-      if (candidate?.options?.name !== AGENT_PRESET_NAME) continue
-      const plugins = candidate.options.config?.plugins
-      if (!Array.isArray(plugins) || !plugins.some(item => item?.name === PERSONA_PLUGIN_NAME)) continue
-      const entryId = String(candidate.options.id)
-      try {
-        if (override && text.trim() !== '') {
-          await editor.edit(candidate, current => ({
-            ...current,
-            plugins: withPersonaPrefix(Array.isArray(current?.plugins) ? current.plugins : [], text),
-          }))
-          overridden.push(entryId)
-        } else {
-          await editor.edit(candidate, (current, inherited) => {
-            const inheritedRows = Array.isArray(inherited?.plugins) ? inherited.plugins : []
-            const inheritedPersona = inheritedRows.find(item => item !== null && typeof item === 'object' && item.name === PERSONA_PLUGIN_NAME)
-            if (inheritedPersona === undefined) return current
-            return {
-              ...current,
-              plugins: (Array.isArray(current?.plugins) ? current.plugins : []).map(item =>
-                item !== null && typeof item === 'object' && item.name === PERSONA_PLUGIN_NAME
-                  ? { ...item, config: structuredClone(inheritedPersona.config ?? {}) }
-                  : item),
-            }
-          })
-          restored.push(entryId)
+    const skipped = []
+    const originals = {}
+    const saved = previousRecord?.builtInOriginals ?? {}
+    for (const row of rows) {
+      const id = row?.entry?.options?.id
+      if (!BUILT_IN_PRESET_ROWS.includes(id) || row?.entry?.options?.name !== AGENT_PRESET_NAME) continue
+      const before = structuredClone(rowConfig(row))
+      const plugins = Array.isArray(before.plugins) ? before.plugins : []
+      const persona = plugins.find(item => item?.name === PERSONA_PLUGIN_NAME)
+      if (persona === undefined) continue
+      let after
+      if (override) {
+        // Keep the pre-override persona, even across repeated applications.
+        const stillOwned = previousRecord?.overrideBuiltIn === true && persona.config?.prefix === previousRecord.text
+        const inheritedPersona = row.inherited?.plugins?.find(item => item?.name === PERSONA_PLUGIN_NAME)
+        // Legacy snapshots have no original baseline: use the shipped persona,
+        // never preserve this plugin's own old override as the original.
+        originals[id] = structuredClone(stillOwned ? (saved[id] ?? inheritedPersona?.config ?? persona.config ?? {}) : (persona.config ?? {}))
+        after = { ...before, plugins: withPersonaPrefix(plugins, text) }
+        overridden.push(id)
+      } else if (previousRecord?.overrideBuiltIn === true && persona.config?.prefix === previousRecord.text) {
+        const inheritedPersona = row.inherited?.plugins?.find(item => item?.name === PERSONA_PLUGIN_NAME)
+        const original = saved[id] ?? inheritedPersona?.config
+        if (original === undefined) { skipped.push(id); continue }
+        const restoredConfig = { ...(persona.config ?? {}) }
+        if (Object.hasOwn(original, 'prefix')) restoredConfig.prefix = structuredClone(original.prefix)
+        else delete restoredConfig.prefix
+        after = {
+          ...before,
+          plugins: plugins.map(item => item?.name === PERSONA_PLUGIN_NAME
+            ? { ...item, config: restoredConfig } : item),
         }
-      } catch (error) {
-        failures.push({ id: entryId, message: messageOf(error) })
+        restored.push(id)
+      } else {
+        // No owned override, or the user changed it elsewhere: do not touch it.
+        if (previousRecord?.overrideBuiltIn === true) skipped.push(id)
+        continue
       }
+      if (!isDeepStrictEqual(before, after)) updates.push({ id, before, after })
     }
-    return { overridden, restored, failures }
+    const deployment = rows.find(row => row?.entry?.options?.id === SYSTEM_PROMPT_ENTRY_ID)
+    const change = this._deploymentChange(deployment)
+    if (change !== null) updates.push({ id: SYSTEM_PROMPT_ENTRY_ID, before: change.before, after: change.after })
+    return { updates, originals, overridden, restored, skipped, deploymentCleared: change !== null }
   }
 
-  /** Clear the deployment persona prefix; returns whether one was present. */
-  async _clearDeploymentPersona(editor) {
-    const entries = this._editorEntries(editor)
-    const entry = entries.find(candidate => candidate?.options?.id === SYSTEM_PROMPT_ENTRY_ID)
-    if (entry === undefined) return false
-    let had = false
-    await editor.edit(entry, (current, inherited) => {
-      had = typeof current?.personaPrefix === 'string' && current.personaPrefix !== ''
-      return inherited
-    })
-    return had
+  /** Remove only user-added deployment persona; keep the shipped base prompt. */
+  _deploymentChange(row) {
+    if (row === undefined) return null
+    const before = structuredClone(rowConfig(row))
+    const inherited = row.inherited ?? {}
+    const after = { ...before }
+    const texts = []
+    for (const key of ['personaPrefix', 'personaSuffix']) {
+      if (typeof before[key] !== 'string' || before[key] === '' || isDeepStrictEqual(before[key], inherited[key])) continue
+      texts.push(before[key])
+      if (Object.hasOwn(inherited, key)) after[key] = structuredClone(inherited[key])
+      else delete after[key]
+    }
+    return texts.length === 0 ? null : { before, after, text: texts.join('\n') }
+  }
+
+  /** Re-read the entry at the mutation point; reject a superseded snapshot. */
+  async _editConfig(editor, update) {
+    const entry = editor.entries().find(candidate => candidate?.options?.id === update.id)
+    if (entry === undefined) throw new PersonaError('config-changed', `configuration entry disappeared: ${update.id}`)
+    try {
+      await editor.edit(entry, current => {
+        if (!isDeepStrictEqual(current, update.before)) throw new PersonaError('config-changed', `configuration changed during apply: ${update.id}`)
+        return structuredClone(update.after)
+      })
+    } catch (error) {
+      if (/overridden.*(?:home patch|command.line overlay)/iu.test(messageOf(error))) {
+        throw new PersonaError('config-authority', 'this setting is controlled by a home patch or command-line overlay; change that source instead of the profile override')
+      }
+      throw error
+    }
+  }
+
+  /** Roll back only configurations still equal to this operation's output. */
+  async _rollbackConfigs(editor, attempted) {
+    const errors = []
+    for (const update of [...attempted].reverse()) {
+      try {
+        const entry = editor.entries().find(candidate => candidate?.options?.id === update.id)
+        if (entry === undefined) throw new Error(`entry disappeared: ${update.id}`)
+        const row = editor.configuration().find(candidate => candidate?.entry?.options?.id === update.id)
+        if (row !== undefined && isDeepStrictEqual(rowConfig(row), update.before)) continue
+        await editor.edit(entry, current => {
+          if (isDeepStrictEqual(current, update.before)) return current
+          if (!isDeepStrictEqual(current, update.after)) throw new Error(`entry was edited elsewhere: ${update.id}`)
+          return structuredClone(update.before)
+        })
+      } catch (error) {
+        errors.push(messageOf(error))
+      }
+    }
+    return errors
   }
 
   /** Retire the applied preset registered by this service. */
@@ -1251,11 +1471,10 @@ class PersonaService {
     const presetId = this.appliedPresetId
     if (presetId === '') return
     const disposer = this.presetDisposers.get(presetId)
+    if (disposer !== undefined) await disposer()
     this.presetDisposers.delete(presetId)
+    this.presetDefinitions.delete(presetId)
     this.appliedPresetId = ''
-    if (disposer !== undefined) {
-      try { await disposer() } catch { /* retiring an already-lost generation */ }
-    }
   }
 
   /** JSON helper: read one file below the persona directory, or undefined. */
@@ -1263,9 +1482,13 @@ class PersonaService {
     const dir = this.deps.personaDir
     if (dir === '') return fallback
     try {
-      return JSON.parse(await readFile(join(dir, fileName), 'utf8'))
+      const path = join(dir, fileName)
+      const info = await lstat(path)
+      if (!info.isFile() || info.isSymbolicLink()) throw new PersonaError('unsafe-file', `state file must be a regular file: ${fileName}`)
+      return JSON.parse(await readFile(path, 'utf8'))
     } catch (error) {
-      if (error && error.code === 'ENOENT') return fallback
+      if (error?.code === 'ENOENT') return fallback
+      if (error instanceof SyntaxError) throw new PersonaError('invalid-state', `invalid JSON in ${fileName}; the file was not overwritten`)
       throw error
     }
   }
@@ -1288,7 +1511,11 @@ class PersonaService {
   /** The persisted override switch for shipped presets. */
   async _readOverrideSetting() {
     const settings = await this._readJson(SETTINGS_FILENAME, {})
-    return settings !== null && typeof settings === 'object' && settings.overrideBuiltInPresets === true
+    if (settings === null || typeof settings !== 'object' || Array.isArray(settings)
+      || (settings.overrideBuiltInPresets !== undefined && typeof settings.overrideBuiltInPresets !== 'boolean')) {
+      throw new PersonaError('invalid-state', 'invalid override settings; the settings file was not overwritten')
+    }
+    return settings.overrideBuiltInPresets === true
   }
 
   /** Persist the override switch for shipped presets. */
@@ -1301,7 +1528,18 @@ class PersonaService {
   /** The persisted apply record, or null. */
   async _readAppliedRecord() {
     const record = await this._readJson(APPLIED_FILENAME, null)
-    return record !== null && typeof record === 'object' ? record : null
+    if (record === null) return null
+    if (typeof record !== 'object' || Array.isArray(record)
+      || (record.version !== undefined && record.version !== 1)
+      || typeof record.presetId !== 'string' || record.presetId === ''
+      || typeof record.name !== 'string' || typeof record.text !== 'string' || record.text.trim() === ''
+      || !Array.isArray(record.files) || record.files.some(id => typeof id !== 'string')
+      || typeof record.appliedAt !== 'string'
+      || (record.overrideBuiltIn !== undefined && typeof record.overrideBuiltIn !== 'boolean')
+      || (record.builtInOriginals !== undefined && (record.builtInOriginals === null || typeof record.builtInOriginals !== 'object' || Array.isArray(record.builtInOriginals)))) {
+      throw new PersonaError('invalid-state', 'invalid applied persona snapshot; preserve it and repair it before applying again')
+    }
+    return record
   }
 
   /** Persist the apply record. */
@@ -1319,60 +1557,106 @@ class PersonaService {
    * restart. Both templates come from the shipped rows' evaluated inherited
    * config, so they follow DSH upgrades without a hardcoded plugin list.
    */
-  async bootstrapPresets() {
-    try {
+  bootstrapPresets() {
+    return this._serialize(async () => {
       const editor = this.deps.getEditor()
       const registry = this._agentPresets()
-      const aiTemplate = editor === undefined || editor === null ? null : this._presetTemplate(editor, AI_EDIT_PRESET_SOURCE_ROW)
-      if (aiTemplate !== null) {
+      try {
+        const template = editor == null ? null : this._presetTemplate(editor, AI_EDIT_PRESET_SOURCE_ROW)
+        if (template === null) throw new PersonaError('no-template', 'the minimal preset template is unavailable for AI editing')
         await this._registerPreset(registry, {
           id: AI_EDIT_PRESET_ID,
           name: AI_EDIT_PRESET_NAME,
-          description: '小星Bot AI辅助人格编辑；无人格预设',
-          order: AI_EDIT_PRESET_ORDER,
-          plugins: aiTemplate.plugins,
-        })
+          description: 'Persona editing / 人格编辑（不带用户人设）',
+          order: PERSONA_PRESET_ORDER + 1,
+          plugins: template.plugins,
+        }, false)
+        delete this.bootstrapErrors.ai
+      } catch (error) {
+        this.bootstrapErrors.ai = { code: error.code ?? 'preset-failed', message: messageOf(error) }
+        this.deps.log(`AI preset bootstrap failed: ${messageOf(error)}`)
       }
-      const applied = await this._readAppliedRecord()
-      if (applied === null) return
-      const text = typeof applied.text === 'string' ? applied.text : ''
-      const presetId = typeof applied.presetId === 'string' && applied.presetId !== '' ? applied.presetId : ''
-      if (text.trim() === '' || presetId === '') return
-      const template = editor === undefined || editor === null ? null : this._presetTemplate(editor, PERSONA_PRESET_SOURCE_ROW)
-      if (template === null) return
-      await this._registerPreset(registry, {
-        id: presetId,
-        name: typeof applied.name === 'string' && applied.name !== '' ? applied.name : presetId,
-        description: '小星Bot 人格预设',
-        order: PERSONA_PRESET_ORDER,
-        plugins: withPersonaPrefix(template.plugins, text),
-      })
-      this.appliedPresetId = presetId
-    } catch (error) {
-      this.deps.log(`persona preset bootstrap failed: ${messageOf(error)}`)
-    }
+      try {
+        const applied = await this._readAppliedRecord()
+        if (applied === null) return
+        const template = editor == null ? null : this._presetTemplate(editor, PERSONA_PRESET_SOURCE_ROW)
+        if (template === null) throw new PersonaError('no-template', 'the standard preset template is unavailable for recovery')
+        await this._registerPreset(registry, {
+          id: applied.presetId,
+          name: applied.name,
+          description: 'Xiaoxing persona / 小星人格',
+          order: PERSONA_PRESET_ORDER,
+          plugins: withPersonaPrefix(template.plugins, applied.text),
+        }, false)
+        this.appliedPresetId = applied.presetId
+        delete this.bootstrapErrors.applied
+      } catch (error) {
+        this.bootstrapErrors.applied = { code: error.code ?? 'preset-failed', message: messageOf(error) }
+        this.deps.log(`persona preset recovery failed: ${messageOf(error)}`)
+      }
+    }, false).catch(error => {
+      if (!this.closed) {
+        this.bootstrapErrors.applied = { code: error.code ?? 'preset-failed', message: messageOf(error) }
+        this.deps.log(`persona preset bootstrap failed: ${messageOf(error)}`)
+      }
+    })
   }
 
-  /** Register one preset, retiring any previous registration of the same id. */
-  async _registerPreset(registry, definition) {
+  /** A registered preset can still be broken; check it on user operations. */
+  async _checkPreset(registry, id) {
+    const preset = await registry.resolve(id)
+    if (preset.broken !== undefined && preset.broken !== null) throw new PersonaError('preset-failed', `preset ${id} cannot load: ${preset.broken}`)
+    return preset
+  }
+
+  /** Register only owned revisions and release late registrations on unload. */
+  async _registerPreset(registry, definition, verify = true) {
+    if (this.closed) throw new PersonaError('disposed', 'the persona service was unloaded')
+    const previous = this.presetDefinitions.get(definition.id)
     const existing = this.presetDisposers.get(definition.id)
-    if (existing !== undefined) {
-      this.presetDisposers.delete(definition.id)
-      try { await existing() } catch { /* retiring an already-lost generation */ }
+    if (existing !== undefined && isDeepStrictEqual(previous, definition)) {
+      if (verify) await this._checkPreset(registry, definition.id)
+      return existing
     }
-    const disposer = await registry.register(definition)
-    this.presetDisposers.set(definition.id, disposer)
-    return disposer
+    if (existing !== undefined) {
+      await existing()
+      this.presetDisposers.delete(definition.id)
+      this.presetDefinitions.delete(definition.id)
+    }
+    let disposer
+    try {
+      disposer = await registry.register(definition)
+      if (this.closed) throw new PersonaError('disposed', 'the persona service was unloaded during preset registration')
+      if (verify) await this._checkPreset(registry, definition.id)
+      this.presetDisposers.set(definition.id, disposer)
+      this.presetDefinitions.set(definition.id, structuredClone(definition))
+      return disposer
+    } catch (error) {
+      if (disposer !== undefined) await disposer()
+      if (previous !== undefined && !this.closed) await this._registerPreset(registry, previous, verify)
+      throw error
+    }
   }
 
-  /** Retire every preset this service registered; used on plugin teardown. */
+  /** Stop admission, wait for in-flight work, then await every owned disposer. */
   disposePresets() {
-    const disposers = [...this.presetDisposers.values()]
-    this.presetDisposers.clear()
-    this.appliedPresetId = ''
-    for (const disposer of disposers) {
-      try { void disposer() } catch { /* teardown is best-effort */ }
-    }
+    if (this.closeTask !== undefined) return this.closeTask
+    this.closed = true
+    this.closeTask = this.queue.then(async () => {
+      const errors = []
+      for (const [id, disposer] of this.presetDisposers) {
+        try {
+          await disposer()
+          this.presetDisposers.delete(id)
+          this.presetDefinitions.delete(id)
+        } catch (error) {
+          errors.push(`${id}: ${messageOf(error)}`)
+        }
+      }
+      this.appliedPresetId = ''
+      if (errors.length > 0) throw new PersonaError('preset-failed', `preset cleanup failed: ${errors.join('; ')}`)
+    })
+    return this.closeTask
   }
 
   /** Plan an import from one directory. */
@@ -1426,7 +1710,7 @@ class PersonaService {
     const consumed = new Set()
     if (soul !== undefined) {
       const source = join(target, soul)
-      const body = await readFile(source, 'utf8')
+      const body = await this._readImportFile(source)
       entries.push({
         name: basename(target),
         description: 'OpenClaw SOUL document',
@@ -1441,7 +1725,7 @@ class PersonaService {
     }
     if (identity !== undefined) {
       const source = join(target, identity)
-      const body = await readFile(source, 'utf8')
+      const body = await this._readImportFile(source)
       const fields = parseIdentityFields(body)
       const description = [fields.vibe, fields.creature].filter(value => typeof value === 'string' && value !== '').join(' · ')
       entries.push({
@@ -1459,7 +1743,7 @@ class PersonaService {
     }
     if (agents !== undefined) {
       const source = join(target, agents)
-      const body = await readFile(source, 'utf8')
+      const body = await this._readImportFile(source)
       entries.push({
         name: `${basename(target)} agents`,
         description: 'OpenClaw AGENTS document (behavior rules, imported disabled)',
@@ -1497,7 +1781,7 @@ class PersonaService {
     let metadata = {}
     if (distributionName !== undefined) {
       const source = join(target, distributionName)
-      const parsed = parseYamlSubset(await readFile(source, 'utf8'))
+      const parsed = parseYamlSubset(await this._readImportFile(source))
       if (!parsed.ok) throw new PersonaError('yaml-invalid', `${source}:${parsed.line}: ${parsed.message}`)
       metadata = parsed.value
     }
@@ -1505,7 +1789,7 @@ class PersonaService {
     const consumed = new Set()
     if (soul !== undefined) {
       const source = join(target, soul)
-      const body = await readFile(source, 'utf8')
+      const body = await this._readImportFile(source)
       const label = typeof metadata.name === 'string' && metadata.name !== '' ? metadata.name : basename(target)
       const version = typeof metadata.version === 'string' ? metadata.version : ''
       entries.push({
@@ -1533,7 +1817,7 @@ class PersonaService {
 
   /** Plan a Hermes SOUL.md import. */
   async _planHermesSoul(source, directory) {
-    const body = await readFile(source, 'utf8')
+    const body = await this._readImportFile(source)
     const parent = directory ?? dirname(source)
     const name = basename(parent)
     return {
@@ -1554,7 +1838,7 @@ class PersonaService {
 
   /** Plan a Hermes `config.yaml` import. */
   async _planHermesConfig(source) {
-    const text = await readFile(source, 'utf8')
+    const text = await this._readImportFile(source)
     const parsed = parseYamlSubset(text)
     if (!parsed.ok) throw new PersonaError('yaml-invalid', `${source}:${parsed.line}: ${parsed.message}`)
     const root = parsed.value
@@ -1601,7 +1885,7 @@ class PersonaService {
 
   /** Plan a generic Markdown import. */
   async _planMarkdownFile(source) {
-    const body = await readFile(source, 'utf8')
+    const body = await this._readImportFile(source)
     const heading = firstHeading(body)
     const name = heading !== '' ? heading : basename(source, extname(source))
     return {
@@ -1661,7 +1945,7 @@ function isFailure(result) {
 function createPersonaTool(service) {
   return {
     name: 'persona_manager',
-    description: 'Manage XiaoxingBot persona and identity files (Markdown with YAML frontmatter): list, read, write, toggle, remove, import OpenClaw or Hermes Agent persona files, preview the composed text, and apply it as a same-named Agent preset. Actions: status (applied preset, override switch, persona directory), list (every persona file), read (one file with its body), write (create or update; body required), toggle (enable or disable one file), remove (delete one file), import (path to a file or directory), compose (preview the enabled text), apply (register the composed text as a same-named Agent preset users switch to per session; force skips the {{...}} template warning, allowEmpty retires the applied preset). 管理小星Bot的人设与身份设定文件：列出、读取、编写、开关、删除、导入 OpenClaw 或 Hermes Agent 的设定文件、预览组合文本，并应用为同名 Agent 预设。用户要求查看、修改、润色或切换人设时使用。',
+    description: 'Manage XiaoxingBot persona files: status, list, read, write, toggle, remove, import OpenClaw/Hermes setups, compose enabled text, and apply a same-named Agent preset. Applying does not switch existing sessions or the default mode; it may update the four shipped personas when the user has enabled that override in settings. Inspect status and compose before applying. 管理人设文件、导入与组合，应用为同名 Agent 预设；不会自动切换会话。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1683,9 +1967,10 @@ function createPersonaTool(service) {
         order: { type: 'integer', description: 'Order inside the slot; defaults to 100.' },
         enabled: { type: 'boolean', description: 'Whether the file takes part in composition.' },
         emoji: { type: 'string', description: 'Optional emoji stored in the frontmatter.' },
-        path: { type: 'string', description: 'File or directory to import for the import action.' },
+        path: { type: 'string', description: 'For import: a persona file/directory inside the requesting session workspace or persona directory. Use the settings page for external sources.' },
         force: { type: 'boolean', description: 'Apply even when the text contains {{...}} template groups.' },
-        allowEmpty: { type: 'boolean', description: 'Apply an empty persona, clearing the applied text.' },
+        allowEmpty: { type: 'boolean', description: 'Explicitly retire the applied persona when no enabled file has text; defaults to false.' },
+        clearDeployment: { type: 'boolean', description: 'Set only with user consent to remove custom deployment persona prefix/suffix; preserves the inherited base prompt and other settings. Required only when such customization exists.' },
       },
       required: ['action'],
     },
@@ -1702,7 +1987,7 @@ function createPersonaTool(service) {
       },
       render: (args, value) => [{ type: 'text', text: value.summary }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const request = asRequest(args)
       const action = typeof request.action === 'string' ? request.action : ''
       try {
@@ -1711,7 +1996,7 @@ function createPersonaTool(service) {
             const result = await service.status({})
             if (isFailure(result)) return toolFailure(result)
             const applied = result.applied === null || result.applied === undefined ? null : result.applied
-            const summary = `Persona mode ${result.mode}; directory ${result.personaDir || '(unset)'}; ${result.files} file(s), ${result.enabledFiles} enabled; applied preset: ${applied === null ? 'none' : `${applied.presetId} (${applied.chars} character(s))`}; override shipped presets: ${result.overrideBuiltIn === true}; can apply: ${result.canApply}.`
+            const summary = `Persona mode ${result.mode}; directory ${result.personaDir || '(unset)'}; ${result.files} file(s), ${result.enabledFiles} enabled; applied preset: ${applied === null ? 'none' : `${applied.presetId} (${applied.chars} character(s), available: ${applied.available === true})`}; override preference: ${result.overrideBuiltIn === true}; actually overridden: ${result.builtInOverridden === true}; custom deployment persona present: ${result.deploymentPersona !== ''}; pending changes: ${result.needsApply === true}; can apply: ${result.canApply}.`
             return toolResult(true, summary, result)
           }
           case 'list': {
@@ -1756,7 +2041,8 @@ function createPersonaTool(service) {
             return toolResult(true, `Persona ${JSON.stringify(file.name)} is now ${file.enabled ? 'enabled' : 'disabled'}.`, result)
           }
           case 'import': {
-            const result = await service.import({ path: request.path })
+            const path = await service.authorizeModelImport(request.path, exec?.agent)
+            const result = await service.import({ path })
             if (isFailure(result)) return toolFailure(result)
             const summary = `Imported ${result.created.length} persona file(s) as ${result.format}; ${result.skipped.length} skipped; ${result.warnings.length} warning(s).`
             return toolResult(true, summary, result)
@@ -1767,7 +2053,7 @@ function createPersonaTool(service) {
             return toolResult(true, `Composed ${result.count} persona file(s) into ${result.text.length} character(s).`, result)
           }
           case 'apply': {
-            const result = await service.apply({ force: request.force, allowEmpty: request.allowEmpty })
+            const result = await service.apply({ force: request.force, allowEmpty: request.allowEmpty, clearDeployment: request.clearDeployment })
             if (isFailure(result)) return toolFailure(result)
             const failures = Array.isArray(result.failures) ? result.failures.length : 0
             const cleared = result.presetId === ''
@@ -1775,7 +2061,7 @@ function createPersonaTool(service) {
               : `Registered persona preset ${JSON.stringify(result.presetName)} (id ${result.presetId}, ${result.appliedPrefix.length} character(s)). Switch a session's mode to this preset to use it; existing conversations keep their current persona.`
             const builtIn = result.overrideBuiltIn === true
               ? ` Overrode ${Array.isArray(result.overridden) ? result.overridden.length : 0} shipped preset(s).`
-              : ' Shipped presets keep their bundled personas.'
+              : ' Shipped presets were left unchanged or had only this plugin’s override restored.'
             const deployment = result.deploymentCleared === true ? ' Cleared the deployment-level persona.' : ''
             return toolResult(true, `${cleared}${builtIn}${deployment}${failures > 0 ? `; ${failures} preset update(s) failed` : ''}`, result)
           }
@@ -1783,6 +2069,7 @@ function createPersonaTool(service) {
             return toolResult(false, `persona_manager: invalid-action: unknown action ${JSON.stringify(action)}`)
         }
       } catch (error) {
+        if (error instanceof PersonaError) return toolFailure(error)
         return toolResult(false, `persona_manager failed: ${messageOf(error)}`)
       }
     },
@@ -1801,8 +2088,16 @@ function resolvePersonaDir(config, profileHome) {
 /** Read the plugin row config defensively; the bundle declares no Config schema. */
 function readConfig(config, profileHome) {
   const raw = config !== null && typeof config === 'object' ? config : {}
+  if (raw.personaDir !== undefined && typeof raw.personaDir !== 'string') throw new PersonaError('invalid-config', 'personaDir must be a string')
+  const maxImportBytes = raw.maxImportBytes ?? 1024 * 1024
+  if (!Number.isSafeInteger(maxImportBytes) || maxImportBytes < 1 || maxImportBytes > 64 * 1024 * 1024) {
+    throw new PersonaError('invalid-config', 'maxImportBytes must be an integer between 1 and 67108864')
+  }
+  const home = typeof profileHome === 'string' && profileHome !== '' ? profileHome : (process.env.DSH_HOME ?? '')
   return {
     personaDir: resolvePersonaDir(raw, profileHome),
+    dshHome: home === '' ? '' : resolve(home),
+    maxImportBytes,
   }
 }
 
@@ -1815,9 +2110,12 @@ export const inject = ['tools']
  * @param {unknown} config - plugin row config, read defensively.
  */
 export function apply(ctx, config) {
-  const settings = readConfig(config)
+  const settings = readConfig(config, ctx.get('profileContext')?.home)
   const service = new PersonaService({
     personaDir: settings.personaDir,
+    dshHome: settings.dshHome,
+    maxImportBytes: settings.maxImportBytes,
+    getImportRoot: agent => agent?.session == null ? undefined : ctx.get('workingDirectory')?.get(agent.session),
     getEditor: () => ctx.get('configEditor'),
     getAgentPresets: () => ctx.get('agentPresets'),
     log: (message) => { ctx.logger.warn(message) },
@@ -1832,6 +2130,10 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.tools.register(tool), 'persona-manager.tool')
   // Runtime preset registration follows the registry: bootstrap when the
   // agentPresets service is present, and retire presets on teardown.
-  ctx.effect(() => ctx.inject(['agentPresets'], () => { void service.bootstrapPresets() }), 'xiaoxing-persona.presets')
-  ctx.effect(() => () => { service.disposePresets() }, 'xiaoxing-persona.retire')
+  ctx.effect(() => {
+    void service.initialize().catch(error => { ctx.logger.warn(`persona initialization failed: ${messageOf(error)}`) })
+    return () => service.disposePresets()
+  }, 'xiaoxing-persona.lifecycle')
+  // inject owns its child fiber; a Fiber is not an effect disposer.
+  ctx.inject(['agentPresets', 'configEditor'], () => { void service.bootstrapPresets() })
 }

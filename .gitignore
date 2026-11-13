@@ -10,6 +10,7 @@ coverage/
 .local/
 personas/
 .applied.json
+.initialized.json
 settings.json
 
 # Credentials and machine-local configuration
