@@ -112,7 +112,23 @@ test('one composition preview control and the personality slot replace the dupli
   for (const retired of ['previewKind', 'showApplied', 'setShowApplied', 'appliedText']) {
     assert.equal(source.includes(retired), false, `retired preview state must not remain: ${retired}`)
   }
-  assert.match(source, /const SLOTS = \['identity', 'voice', 'instructions', 'personality'\]/)
+  assert.match(source, /const SLOTS = \['identity', 'voice', 'user', 'instructions', 'personality'\]/)
   assert.equal(source.includes("'overlay'"), false, 'the client no longer offers the overlay slot')
+  client.dispose()
+})
+
+
+test('USER.md has localized profile controls and new AI drafts carry their category', async () => {
+  const client = makeClient()
+  await client.plugin.apply(client.ctx)
+  const dictionaries = client.locales.get('xiaoxing-persona')
+  for (const language of ['en', 'zh']) {
+    const dictionary = dictionaries[language]
+    assert.equal(dictionary['list.slot.user'], 'USER.md')
+    for (const key of ['editor.userBody', 'editor.title.userNew', 'editor.title.userEdit']) assert.equal(typeof dictionary[key], 'string')
+    assert.match(dictionary['editor.slotHint'], /SOUL → USER → AGENTS/)
+  }
+  assert.match(source, /named === '' \? \{ instruction, slot: draft\.slot \} : \{ id: named, instruction \}/)
+  assert.match(source, /draft\.slot === 'user' \? 'editor\.userBody' : 'editor\.body'/)
   client.dispose()
 })

@@ -627,7 +627,7 @@ describe('CRUD and file ids', () => {
 
     const tool = fake.tools.find(candidate => candidate.name === 'persona_manager')
     assert.ok(tool, 'the persona_manager tool must be registered')
-    assert.deepEqual(tool.parameters.properties.slot.enum, ['identity', 'voice', 'instructions', 'personality'])
+    assert.deepEqual(tool.parameters.properties.slot.enum, ['identity', 'voice', 'user', 'instructions', 'personality'])
 
     const rejected = expectFailure(await service.write({ name: 'unknown', slot: 'nope', body: 'x' }), 'unknown slot')
     assert.equal(rejected.code, 'invalid-slot')
@@ -637,13 +637,31 @@ describe('CRUD and file ids', () => {
     }
   })
 
-  it('composes identity, voice, instructions and personality in that order', async () => {
+  it('supports user-profile tool writes, edits, toggles and removal without applying', async () => {
+    const { service, fake } = await loadService()
+    const tool = fake.tools.find(candidate => candidate.name === 'persona_manager')
+    const result = expectOk(await tool.execute({ action: 'write', id: 'provided-user', name: 'User preferences', slot: 'user', body: 'Prefers concise replies.' }, {}), 'tool write user')
+    assert.equal(result.data.file.slot, 'user')
+    assert.equal(expectOk(await service.read({ id: 'provided-user' })).file.body.trim(), 'Prefers concise replies.')
+    assert.equal(expectOk(await service.list({})).files[0].slot, 'user')
+    expectOk(await service.write({ id: 'provided-user', body: 'Prefers clear replies.' }))
+    assert.equal(expectOk(await service.compose({})).text, 'Prefers clear replies.')
+    expectOk(await service.toggle({ id: 'provided-user', enabled: false }))
+    assert.equal(expectOk(await service.compose({})).text, '')
+    expectOk(await service.toggle({ id: 'provided-user', enabled: true }))
+    assert.equal(expectOk(await service.read({ id: 'provided-user' })).file.slot, 'user')
+    assert.ok(!(await readdir(tmp)).includes('.applied.json'))
+    expectOk(await service.remove({ id: 'provided-user' }))
+    assert.equal(expectOk(await service.list({})).files.length, 0)
+  })
+
+  it('composes identity, voice, user, instructions and personality in that order', async () => {
     const { service } = await loadService()
-    for (const [slot, body] of [['personality', 'PERSONALITY'], ['instructions', 'INSTRUCTIONS'], ['voice', 'VOICE'], ['identity', 'IDENTITY']]) {
+    for (const [slot, body] of [['personality', 'PERSONALITY'], ['instructions', 'INSTRUCTIONS'], ['user', 'USER'], ['voice', 'VOICE'], ['identity', 'IDENTITY']]) {
       expectOk(await service.write({ name: `slot-${slot}`, slot, body }), `write ${slot}`)
     }
     const composed = expectOk(await service.compose({}), 'compose canonical order')
-    assert.deepEqual(composed.text.split('\n\n'), ['IDENTITY', 'VOICE', 'INSTRUCTIONS', 'PERSONALITY'])
+    assert.deepEqual(composed.text.split('\n\n'), ['IDENTITY', 'VOICE', 'USER', 'INSTRUCTIONS', 'PERSONALITY'])
   })
 })
 
@@ -1090,6 +1108,42 @@ describe('AI editing session', () => {
     assert.equal(fixture.followups.length, 1)
     assert.equal(fixture.flushCalls.length, 1)
     assert.match(fixture.followups[0].content[0].text, /PERSONA/)
+  })
+
+  it('AI editing uses supplied user facts instead of persona creative guidance', async () => {
+    const fixture = sessionServices()
+    const { service } = await loadService({ services: { sessionController: fixture.controller, sessions: fixture.sessions, workspaceRegistry: fixture.workspaceRegistry } })
+    await service.bootstrapPresets()
+    const created = expectOk(await service.write({ name: 'User facts', slot: 'user', body: 'Provided fact: prefers Chinese.' }))
+    expectOk(await service.aiEdit({ id: created.file.id, slot: 'voice', instruction: '整理措辞' }))
+    const prompt = fixture.followups[0].content[0].text
+    assert.match(prompt, /用户资料整理任务/)
+    assert.match(prompt, /Provided fact: prefers Chinese/)
+    assert.match(prompt, /不得虚构、猜填/)
+    assert.match(prompt, /slot: user/)
+    assert.doesNotMatch(prompt, /500–3000|第二人称|示范台词/)
+  })
+
+  it('AI user-profile creation asks for facts and does not seed a user file', async () => {
+    const fixture = sessionServices()
+    const { service } = await loadService({ services: { sessionController: fixture.controller, sessions: fixture.sessions, workspaceRegistry: fixture.workspaceRegistry } })
+    await service.bootstrapPresets()
+    const before = (await readdir(tmp)).sort()
+    expectOk(await service.aiEdit({ slot: 'user' }))
+    const prompt = fixture.followups[0].content[0].text
+    assert.match(prompt, /用户资料整理任务/)
+    assert.match(prompt, /先请用户说明要记录的信息/)
+    assert.match(prompt, /slot: user/)
+    assert.doesNotMatch(prompt, /500–3000|第二人称|示范台词/)
+    assert.deepEqual((await readdir(tmp)).sort(), before)
+  })
+
+  it('rejects an invalid AI creation slot before creating a session', async () => {
+    const fixture = sessionServices()
+    const { service } = await loadService({ services: { sessionController: fixture.controller, sessions: fixture.sessions, workspaceRegistry: fixture.workspaceRegistry } })
+    await service.bootstrapPresets()
+    assert.equal(expectFailure(await service.aiEdit({ slot: 'nope' })).code, 'invalid-slot')
+    assert.equal(fixture.createCalls.length, 0)
   })
 
   it('treats sessions.flush(false) as non-fatal', async () => {

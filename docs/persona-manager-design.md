@@ -1,6 +1,6 @@
 # 人格管理插件设计
 
-本文描述独立插件 `@xiaoxing/persona-manager` 的 `0.2.0-rc.2` 发布候选。首次 Git 导入的 0.1.0 是此前已验收快照；后续候选在其上进行有测试的产品化修复，本轮合并预览入口并规范 personality 槽位，不重建历史中间版本。
+本文描述独立插件 `@xiaoxing/persona-manager` 的 `0.2.0-rc.3` 发布候选。首次 Git 导入的 0.1.0 是此前已验收快照；后续候选在其上进行有测试的产品化修复，本轮加入 USER.md 用户资料类别，保留单一预览和规范槽位，不重建历史中间版本。
 
 ## 1. 仓库与依赖
 
@@ -37,7 +37,7 @@ Host 仅使用 Node 内置模块。React 与 Client 服务由 DSH 模块表提�
 
 Frontmatter 仍为扁平字段，未知键编辑时保留；正文不自动改写措辞，但会清理开头空行并补结尾换行。组合时只取启用的非空正文，按 slot / order / name 排序，trim 后以两个换行连接。
 
-槽位顺序为 `identity → voice → instructions → personality`，Host、Client、工具枚举与 Hermes personalities 导入使用同一组名称。本次直接更名，不保留旧槽位别名或迁移路径，不自动修改用户文件。
+槽位顺序为 `identity → voice → user → instructions → personality`，Host、Client、工具枚举与 Hermes personalities 导入使用同一组名称。user 表示用户明确提供的资料，区别于助手 identity；不自动创建默认资料。只增加类别，不添加旧槽位别名或迁移路径，不自动修改用户文件。
 
 ## 3. Remote 与错误
 
@@ -87,6 +87,8 @@ AI 编辑先检查本插件拥有的 `xiaoxing-ai-edit`，再调用 `sessionCont
 
 YAML 为所需子集，不是完整 YAML；解析失败返回位置。疑似注入只告警，不保证任意外部人设可信。插件与预设不是安全沙箱，导入设定应由用户审阅。
 
+USER.md 可在 OpenClaw 工作区中或作为单独 Markdown 导入，归入 user；不读取记忆或运行配置。用户资料的 AI 提示仅整理已提供事实，不猜填个人信息；新草稿的类别从 Client 传入并在创建会话前校验。
+
 ## 7. 业务接口
 
 | 方法 | request / 特点 |
@@ -96,13 +98,13 @@ YAML 为所需子集，不是完整 YAML；解析失败返回位置。疑似注�
 | compose | `{}`，返回 text / used / count，不应用 |
 | apply | `{force?, allowEmpty?, clearDeployment?}`，返回实际预设、覆盖/恢复/跳过与部署移除结果 |
 | status | `{}`，返回快照与 canApply / canAiEdit / needsApply 等实际状态 |
-| aiEdit | `{id?, instruction?}`，返回新会话 ID |
+| aiEdit | `{id?, instruction?, slot?}`，新草稿使用所选 slot；已有文件以磁盘类别为准，返回新会话 ID |
 | setOverrideBuiltIn | `{enabled}`，只保存覆盖选择 |
 
 模型工具有九种 action，不提供 AI 开会话或覆盖开关授权；结果为 `{ok, summary, data?}`。工具描述精简为用途与关键行为，导入范围和清空约束放在参数上。
 
 ## 8. 检查范围
 
-当前有 45 项隔离测试：33 项生命周期/CRUD/槽位/事务，8 项导入与状态，4 项 Client 注册与单一预览契约。注册测试不创建模拟页面，也不能替代真实视觉与点击验证。测试目录均为可识别、可清理的临时目录，不操作真实用户人设。
+当前有 51 项隔离测试：37 项生命周期/CRUD/槽位/事务/AI 提示，9 项导入与状态，5 项 Client 注册与用户资料/单一预览契约。注册测试不创建模拟页面，也不能替代真实视觉与点击验证。测试目录均为可识别、可清理的临时目录，不操作真实用户人设。
 
 [维护约定](<../CONTRIBUTING.md>)规定包检查、测试、Git 检查与真实 DSH 验证分开记录。正式上传/发布不在本轮自动化步骤中，`private` 保护与远程目标保持待用户确认。

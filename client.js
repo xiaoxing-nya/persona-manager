@@ -22,12 +22,12 @@ window.__ModuleLoader__.load({
      */
     const REMOTE_METHODS = ['list', 'read', 'write', 'delete', 'toggle', 'import', 'compose', 'apply', 'status', 'aiEdit', 'setOverrideBuiltIn']
     /** Persona slots in composition order. */
-    const SLOTS = ['identity', 'voice', 'instructions', 'personality']
+    const SLOTS = ['identity', 'voice', 'user', 'instructions', 'personality']
 
     /** English dictionary (sentence case). */
     const EN = {
       'title': 'Xiaoxing persona manager',
-      'intro': 'Persona files are plain Markdown below the persona directory. Enabled files are composed in slot order and applied as a same-named Agent preset; switch a session mode to use it.',
+      'intro': 'Persona and user-profile files are plain Markdown below the persona directory. Enabled files are composed in slot order and applied as a same-named Agent preset; switch a session mode to use it.',
       'loading': 'Loading personas…',
       'refresh': 'Refresh',
       'status.applied': 'Applied · {chars} chars',
@@ -52,6 +52,7 @@ window.__ModuleLoader__.load({
       'list.removeConfirm': 'Delete persona "{name}"? The file is removed from disk.',
       'list.slot.identity': 'IDENTITY.md',
       'list.slot.voice': 'SOUL.md',
+      'list.slot.user': 'USER.md',
       'list.slot.instructions': 'AGENTS.md',
       'list.slot.personality': 'Personality',
       'list.source.manual': 'manual',
@@ -65,9 +66,12 @@ window.__ModuleLoader__.load({
       'editor.name': 'Name',
       'editor.description': 'Description',
       'editor.slot': 'Category',
-      'editor.slotHint': 'Composes in order: IDENTITY → SOUL → AGENTS → personality.',
+      'editor.slotHint': 'Composes in order: IDENTITY → SOUL → USER → AGENTS → personality.',
       'editor.order': 'Order',
       'editor.body': 'Persona text',
+      'editor.userBody': 'User profile',
+      'editor.title.userNew': 'New user profile',
+      'editor.title.userEdit': 'Edit user profile',
       'editor.enabled': 'Enabled',
       'editor.save': 'Save',
       'editor.saving': 'Saving…',
@@ -76,7 +80,7 @@ window.__ModuleLoader__.load({
       'ai.busy': 'Opening session…',
       'ai.hint': 'Opens a new session',
       'import.title': 'Import personas',
-      'import.hint': 'Point at an OpenClaw workspace directory, a Hermes SOUL.md, a Hermes config.yaml, or any Markdown file. The format is detected from the file and directory names.',
+      'import.hint': 'Point at an OpenClaw workspace directory, a Hermes SOUL.md, a Hermes config.yaml, a USER.md user profile, or any Markdown file. The format is detected from the file and directory names.',
       'import.path': 'Path',
       'import.pathPlaceholder': 'C:\\Users\\me\\persona or /home/me/persona/SOUL.md',
       'import.button': 'Import',
@@ -151,7 +155,7 @@ window.__ModuleLoader__.load({
     /** Chinese dictionary. */
     const ZH = {
       'title': '小星人格管理',
-      'intro': '人格文件是人格目录下的纯 Markdown 文件。启用的文件按槽位顺序组合，应用为同名 Agent 预设，按会话切换使用。',
+      'intro': '人设与用户资料是人格目录下的纯 Markdown 文件。启用的文件按槽位顺序组合，应用为同名 Agent 预设，按会话切换使用。',
       'loading': '正在加载人格…',
       'refresh': '刷新',
       'status.applied': '已应用 · {chars} 字',
@@ -176,6 +180,7 @@ window.__ModuleLoader__.load({
       'list.removeConfirm': '删除人格“{name}”？文件将从磁盘移除。',
       'list.slot.identity': 'IDENTITY.md',
       'list.slot.voice': 'SOUL.md',
+      'list.slot.user': 'USER.md',
       'list.slot.instructions': 'AGENTS.md',
       'list.slot.personality': 'personality',
       'list.source.manual': '手动创建',
@@ -189,9 +194,12 @@ window.__ModuleLoader__.load({
       'editor.name': '名称',
       'editor.description': '描述',
       'editor.slot': '类别',
-      'editor.slotHint': '组合顺序：IDENTITY → SOUL → AGENTS → personality。',
+      'editor.slotHint': '组合顺序：IDENTITY → SOUL → USER → AGENTS → personality。',
       'editor.order': '排序',
       'editor.body': '人设正文',
+      'editor.userBody': '用户资料',
+      'editor.title.userNew': '新建用户资料',
+      'editor.title.userEdit': '编辑用户资料',
       'editor.enabled': '启用',
       'editor.save': '保存',
       'editor.saving': '正在保存…',
@@ -200,7 +208,7 @@ window.__ModuleLoader__.load({
       'ai.busy': '正在创建会话…',
       'ai.hint': '将开启新会话',
       'import.title': '导入人格',
-      'import.hint': '可以指向 OpenClaw 工作区目录、Hermes 的 SOUL.md、Hermes 的 config.yaml，或任意 Markdown 文件。格式根据文件名与目录约定自动识别。',
+      'import.hint': '可以指向 OpenClaw 工作区目录、Hermes 的 SOUL.md、Hermes 的 config.yaml、USER.md 用户资料，或任意 Markdown 文件。格式根据文件名与目录约定自动识别。',
       'import.path': '路径',
       'import.pathPlaceholder': 'C:\\Users\\me\\persona 或 /home/me/persona/SOUL.md',
       'import.button': '导入',
@@ -611,13 +619,13 @@ window.__ModuleLoader__.load({
             return
           }
           const instruction = [
-            draftName === '' ? '' : `人格名字用「${draftName}」。`,
-            isNew && draft.body.trim() !== '' ? `创作参考草稿：\n${draft.body}` : '',
+            draftName === '' ? '' : `文件名称用「${draftName}」。`,
+            isNew && draft.body.trim() !== '' ? `用户提供的参考内容：\n${draft.body}` : '',
           ].filter(Boolean).join('\n')
           setAiBusy(true)
           setFailure(null)
           setNotice('')
-          const result = await call('aiEdit', named === '' ? { instruction } : { id: named, instruction })
+          const result = await call('aiEdit', named === '' ? { instruction, slot: draft.slot } : { id: named, instruction })
           setAiBusy(false)
           if (!result.ok) {
             setFailure(result)
@@ -719,7 +727,7 @@ window.__ModuleLoader__.load({
             onSubmit: (event) => { event.preventDefault(); void handleSave() },
           },
             h('div', { className: 'xxp-editorHead' },
-              h('h3', { className: 'xxp-panelTitle' }, draft.isNew === true ? t('editor.title.new') : t('editor.title.edit')),
+              h('h3', { className: 'xxp-panelTitle' }, t(draft.slot === 'user' ? (draft.isNew === true ? 'editor.title.userNew' : 'editor.title.userEdit') : (draft.isNew === true ? 'editor.title.new' : 'editor.title.edit'))),
               h('div', { className: 'xxp-actions' },
                 h('span', { className: 'xxp-aiHint' }, t('ai.hint')),
                 h('button', {
@@ -769,7 +777,7 @@ window.__ModuleLoader__.load({
                 onChange: (event) => { setDraft({ ...draft, description: event.target.value }) },
               })),
               field(h('span', null,
-                t('editor.body'),
+                t(draft.slot === 'user' ? 'editor.userBody' : 'editor.body'),
                 h('span', { className: 'xxp-labelCount' }, `${String(draft.body).length}`),
               ), h('textarea', {
                 className: 'xxp-textarea',

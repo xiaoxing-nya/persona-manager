@@ -1,12 +1,12 @@
 # 小星人格管理
 
-`@xiaoxing/persona-manager` 是独立的 DeepSeek Harness（DSH）插件仓库。它管理 Markdown 人设文件，支持导入 OpenClaw / Hermes Agent 设定、可视化编辑和 AI 辅助编辑，并把启用内容应用为同名 Agent 预设。
+`@xiaoxing/persona-manager` 是独立的 DeepSeek Harness（DSH）插件仓库。它管理 Markdown 人设与用户资料文件，支持导入 OpenClaw / Hermes Agent 设定、可视化编辑和 AI 辅助编辑，并把启用内容应用为同名 Agent 预设。
 
 插件只依赖 DSH 原生服务，不依赖其他小星Bot插件或 IM 插件。人格文件与本机运行状态不属于源码仓库。
 
 ## 功能
 
-- 多个人设文件独立启用，按 `identity → voice → instructions → personality` 的槽位顺序组合。
+- 多个人设文件独立启用，按 `identity → voice → user → instructions → personality` 的槽位顺序组合。
 - 设置页编辑名称、描述、槽位、排序、正文，支持导入；只保留一个「预览组合」入口，展示当前启用文件的组合全文，再次点击收起，不执行应用。
 - 应用后注册同名 Agent 预设，用户自行在新会话的模式选择器中选用；不切换宿主默认选中的预设。
 - 可选覆盖内置预设的人格，默认关闭；已有会话继续保留其原预设。
@@ -76,10 +76,16 @@ emoji: ""
 
 - `id` 为文件名去掉 `.md`，最长 120 字符；创建时保留 Unicode、清洗路径分隔符和 Windows 保留字符，重名时安全追加序号。设备名如 `CON` / `NUL` 不可显式使用，自动派生时会加前缀。
 - 只接受普通人设文件，不跟随文件符号链接；损坏状态文件保留并明确报错，不静默重置。
-- 槽位为 `identity`、`voice`、`instructions`、`personality`，不保留旧名称别名或迁移逻辑。
+- 槽位为 `identity`、`voice`、`user`、`instructions`、`personality`，不保留旧名称别名或迁移逻辑。
 - 文件按槽位、`order`、`name` 排序，只有启用且正文非空的文件参与组合。
 - 正文不会被自动润色；保存时去掉开头空行并补上结尾换行，因此不承诺字节级原样保存。
 - frontmatter 使用扁平字段，未知字段在编辑已有文件时保留。
+
+## 用户资料（USER.md）
+
+`user` 记录用户明确提供的称呼、时区和沟通偏好等事实，不是助手身份。设置页新建文件后，类别选择「USER.md」，填写正文并保存，再预览和手动应用。
+
+USER.md 是类别标签，文件仍按 `<id>.md` 保存，不强制名称，也不自动创建默认资料。AI 辅助只整理已提供的信息，缺失信息要求向用户确认，不套用人格创作模板。
 
 ## 应用与预设生命周期
 
@@ -105,10 +111,11 @@ emoji: ""
 
 | 输入 | 行为 |
 |---|---|
-| OpenClaw 工作区（含 `SOUL.md`） | `SOUL.md` → voice；`IDENTITY.md` → identity；`AGENTS.md` → instructions，默认停用。跳过用户画像、记忆、技能与运行配置。 |
+| OpenClaw 工作区（含 `SOUL.md`） | `SOUL.md` → voice；`IDENTITY.md` → identity；`USER.md` → user；`AGENTS.md` → instructions，默认停用。跳过记忆、技能与运行配置；不自动应用导入资料。 |
 | Hermes `SOUL.md` | voice，名称取文件所在目录名。 |
 | Hermes profile（含 `distribution.yaml`） | 读取 name / version / description，导入 `SOUL.md`；version 只用于缺省描述，不保存 author 字段。 |
 | Hermes YAML 配置 | `agent.personalities` → personality；当前选择的 personality 初始启用；`agent.system_prompt` → instructions，默认停用。 |
+| USER.md（可单独导入） | user，保留用户已提供的正文，默认启用；应用仍需用户操作。 |
 | 其他 Markdown | voice，名称取一级标题或文件名。 |
 
 导入只读普通文件，每个文件受 `maxImportBytes` 限制；隐藏配置文件与非人格目录中的私有 DSH 状态不能作为来源。模型工具限于当前会话工作目录或已配置的人格目录，并验证真实路径；工作区外的来源由用户在设置页显式导入。导入不是通用文件读取工具。
@@ -133,9 +140,9 @@ npm test
 git status --short
 ```
 
-包含 45 项隔离测试（首次使用、CRUD、槽位与排序、预设事务与清理、导入边界、Client 注册与单一预览契约）。测试不使用真实用户数据；Node 子进程继承标准输出，不依赖 test runner 的管道捕获。语法与隔离测试不能代替 DSH 中的真实界面验证。
+包含 51 项隔离测试（首次使用、CRUD、用户资料与五槽排序、预设事务与清理、导入边界、AI 辅助提示、Client 注册与单一预览契约）。测试不使用真实用户数据；Node 子进程继承标准输出，不依赖 test runner 的管道捕获。语法与隔离测试不能代替 DSH 中的真实界面验证。
 
-当前为 `0.2.0-rc.2` 发布候选；Node 22+，兼容声明为 DSH `>=0.2.2-rc.1 <0.3.0-0`，实机核验基于 `0.2.2-rc.1`，其他版本需复测。保持 `private: true`，未配置远程仓库或执行上传；实际发布前另行确认目标仓库/渠道。
+当前为 `0.2.0-rc.3` 发布候选；Node 22+，兼容声明为 DSH `>=0.2.2-rc.1 <0.3.0-0`，实机核验基于 `0.2.2-rc.1`，其他版本需复测。保持 `private: true`，未配置远程仓库或执行上传；实际发布前另行确认目标仓库/渠道。
 
 - [设计说明](<docs/persona-manager-design.md>)
 - [维护与提交约定](<CONTRIBUTING.md>)

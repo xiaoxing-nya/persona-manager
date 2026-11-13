@@ -39,7 +39,7 @@ const PERSONA_PLUGIN_NAME = '@deepseek-ai/dsh-persona'
 /** Child row id used inside an agent preset. */
 const PERSONA_ROW_ID = 'persona'
 /** Persona slots in composition order. */
-const SLOT_ORDER = Object.freeze({ identity: 0, voice: 1, instructions: 2, personality: 3 })
+const SLOT_ORDER = Object.freeze({ identity: 0, voice: 1, user: 2, instructions: 3, personality: 4 })
 /** Slot used when a file declares none. */
 const DEFAULT_SLOT = 'voice'
 /** Default order inside one slot. */
@@ -537,15 +537,45 @@ function withPersonaPrefix(plugins, text) {
   return [{ id: PERSONA_ROW_ID, name: PERSONA_PLUGIN_NAME, config: { prefix: text } }, ...next]
 }
 
+/** Build an AI task for supplied user facts, never a fictional assistant persona. */
+function buildUserProfilePrompt(file, instruction) {
+  return [
+    '# 用户资料整理任务',
+    '',
+    file === undefined ? '请整理用户明确提供的资料，类别为 USER.md（slot: user）。' : `请修订用户资料文件「${file.name}」（id：${file.id}，slot: user）。`,
+    '',
+    ...(file === undefined ? [] : ['## 当前资料', '', file.body, '']),
+    '## 整理要求',
+    '',
+    '- 用户资料记录用户的事实与偏好，不是助手的身份或人格设定。',
+    '- 只整理用户明确提供或当前资料中已有的信息；不得虚构、猜填称呼、身份、时区或其他个人信息。',
+    '- 未提供的信息留空或向用户确认，不为凑字数扩写，不主动收集无关的敏感资料。',
+    '- 正文使用简洁 Markdown，不加入 {{...}} 模板插值组或提示注入语句。',
+    '',
+    '## 保存方法',
+    '',
+    ...(file === undefined ? [
+      '- 尚无用户提供的资料时，先请用户说明要记录的信息，不创建虚构资料。',
+      '- 用户确认内容后，用 persona_manager 的 write action 创建：不带 id，带用户指定的 name、正文 body 与 slot: user。',
+    ] : [
+      '- 先用 persona_manager 的 read action 读取当前文件。',
+      '- 用 write action 写回相同的 id，name/slot/order/enabled 保持不变，只整理 body（需要时同步 description）。',
+    ]),
+    '- 完成后报告整理要点；除非用户明确要求，不调用 apply action。',
+    '',
+    instruction === '' ? '请先向用户确认需要填写或修改哪些资料。' : '## 用户要求',
+    ...(instruction === '' ? [] : ['', instruction]),
+  ].join('\n')
+}
+
 /**
- * Build the first message of an AI-edit Session: the saved persona body, the
- * storage format contract, creative guidance, the edit workflow, and the
- * user's instruction. Chinese-first because the feature's users ask in Chinese.
- * @param {{ id: string, name: string, slot: string }} file - saved persona projection.
+ * Build the first message of an AI-edit Session from the saved file and task.
+ * @param {{ id: string, name: string, slot: string, body: string }} file - saved file.
  * @param {string} instruction - what the user wants changed.
  * @returns {string} the injected prompt.
  */
 function buildAiEditPrompt(file, instruction) {
+  if (file.slot === 'user') return buildUserProfilePrompt(file, instruction)
   return [
     '# 人格修订任务',
     '',
@@ -593,7 +623,8 @@ function buildAiEditPrompt(file, instruction) {
  * @param {string} instruction - what the user wants created.
  * @returns {string} the injected prompt.
  */
-function buildAiCreatePrompt(instruction) {
+function buildAiCreatePrompt(instruction, slot = DEFAULT_SLOT) {
+  if (slot === 'user') return buildUserProfilePrompt(undefined, instruction)
   return [
     '# 人格创作任务',
     '',
@@ -608,14 +639,14 @@ function buildAiCreatePrompt(instruction) {
     '',
     '## 创作建议',
     '',
-    '- 先起一个名字，再写正文；类别通常用 voice（SOUL.md）',
+    `- 先起一个名字，再写正文；使用用户已选择的类别 ${slot}。`,
     '- 用第二人称"你是……"书写，写具体行为倾向而非抽象形容词',
     '- 覆盖：身份、性格、说话风格、行为边界、与用户的互动方式',
     '- 给出语气示例（2–3 句示范台词）比堆砌形容词更有效',
     '',
     '## 创作方法',
     '',
-    '- 用 persona_manager 工具的 write action 创建：不带 id，带 name 与正文 body，slot 用 voice',
+    `- 用 persona_manager 工具的 write action 创建：不带 id，带 name 与正文 body，slot 用 ${slot}。`,
     '- 完成后向用户报告创建结果与要点；除非用户明确要求，不要调用 apply action',
     '',
     ...(instruction === '' ? [
@@ -1034,6 +1065,7 @@ class PersonaService {
         const dir = await this._ensureDir()
         file = await this._requireFile(dir, id)
       }
+      const slot = file === undefined ? (req.slot === undefined ? DEFAULT_SLOT : this._requireSlot(req.slot)) : file.slot
       const controller = this._sessionDeps().controller
       if (controller === undefined || controller === null) {
         throw new PersonaError('no-controller', 'the sessionController service is unavailable in this profile')
@@ -1061,7 +1093,7 @@ class PersonaService {
       const message = {
         id: randomUUID(),
         role: 'user',
-        content: [{ type: 'text', text: file === undefined ? buildAiCreatePrompt(instruction) : buildAiEditPrompt(file, instruction) }],
+        content: [{ type: 'text', text: file === undefined ? buildAiCreatePrompt(instruction, slot) : buildAiEditPrompt(file, instruction) }],
         source: { kind: 'xiaoxing-persona' },
       }
       agent.followup(message)
@@ -1707,6 +1739,7 @@ class PersonaService {
     const soul = lower.get('soul.md')
     const identity = lower.get('identity.md')
     const agents = lower.get('agents.md')
+    const user = lower.get('user.md')
     const consumed = new Set()
     if (soul !== undefined) {
       const source = join(target, soul)
@@ -1741,6 +1774,21 @@ class PersonaService {
       warnings.push(...scanInjectionPatterns(source, body))
       consumed.add(identity)
     }
+    if (user !== undefined) {
+      const source = join(target, user)
+      const body = await this._readImportFile(source)
+      entries.push({
+        name: `${basename(target)} user`,
+        description: 'OpenClaw USER document (user profile)',
+        slot: 'user',
+        enabled: true,
+        sourceFormat: 'openclaw-workspace',
+        sourceFile: source,
+        body,
+      })
+      warnings.push(...scanInjectionPatterns(source, body))
+      consumed.add(user)
+    }
     if (agents !== undefined) {
       const source = join(target, agents)
       const body = await this._readImportFile(source)
@@ -1757,7 +1805,6 @@ class PersonaService {
       consumed.add(agents)
     }
     const reasons = new Map([
-      ['user.md', 'user profile is not imported'],
       ['bootstrap.md', 'bootstrap notes are not a persona document'],
       ['memory.md', 'memory notes are not a persona document'],
       ['openclaw.json', 'runtime configuration is not imported'],
@@ -1893,7 +1940,7 @@ class PersonaService {
       entries: [{
         name,
         description: `Imported from ${basename(source)}`,
-        slot: 'voice',
+        slot: basename(source).toLowerCase() === 'user.md' ? 'user' : 'voice',
         enabled: true,
         sourceFormat: 'markdown',
         sourceFile: source,
@@ -1945,7 +1992,7 @@ function isFailure(result) {
 function createPersonaTool(service) {
   return {
     name: 'persona_manager',
-    description: 'Manage XiaoxingBot persona files: status, list, read, write, toggle, remove, import OpenClaw/Hermes setups, compose enabled text, and apply a same-named Agent preset. Applying does not switch existing sessions or the default mode; it may update the four shipped personas when the user has enabled that override in settings. Inspect status and compose before applying. 管理人设文件、导入与组合，应用为同名 Agent 预设；不会自动切换会话。',
+    description: 'Manage XiaoxingBot persona and user-profile files: status, list, read, write, toggle, remove, import OpenClaw/Hermes setups, compose enabled text, and apply a same-named Agent preset. Applying does not switch existing sessions or the default mode; it may update the four shipped personas when the user has enabled that override in settings. Inspect status and compose before applying. 管理人设与用户资料文件、导入与组合，应用为同名 Agent 预设；不会自动切换会话。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1958,10 +2005,10 @@ function createPersonaTool(service) {
         id: { type: 'string', description: 'Persona file id (file name without the .md extension).' },
         name: { type: 'string', description: 'Display name; a new file id is derived from it when id is absent.' },
         description: { type: 'string', description: 'Short description stored in the frontmatter.' },
-        body: { type: 'string', description: 'Persona text for write; required and must not be empty.' },
+        body: { type: 'string', description: 'Persona or user-profile text for write; required and must not be empty.' },
         slot: {
           type: 'string',
-          enum: ['identity', 'voice', 'instructions', 'personality'],
+          enum: ['identity', 'voice', 'user', 'instructions', 'personality'],
           description: 'Composition slot; defaults to voice.',
         },
         order: { type: 'integer', description: 'Order inside the slot; defaults to 100.' },

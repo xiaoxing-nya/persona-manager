@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Xiaoxing persona manager",
-    "description": "Manage persona files, import existing setups, edit with AI assistance, and apply same-named DSH Agent presets. Includes a minimal first-run persona."
+    "description": "Manage persona and user-profile files, import existing setups, edit with AI assistance, and apply same-named DSH Agent presets. Includes a minimal first-run persona."
   }
 }

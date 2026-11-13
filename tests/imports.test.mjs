@@ -36,26 +36,46 @@ async function fixture(t, { maxImportBytes = 1024 * 1024 } = {}) {
 
 function success(result) { assert.notEqual(result.ok, false, JSON.stringify(result)); return result }
 
-test('OpenClaw import keeps persona files and skips private runtime/user data', async t => {
+test('OpenClaw imports supplied personas and USER profiles, but skips runtime and memory data', async t => {
   const f = await fixture(t)
   const input = join(f.workspace, 'openclaw')
   await mkdir(input)
   await writeFile(join(input, 'SOUL.md'), 'You answer clearly.\n')
   await writeFile(join(input, 'IDENTITY.md'), '# Identity\n- Name: Example\n- Emoji: ⭐\n')
   await writeFile(join(input, 'AGENTS.md'), 'Example behavior rules.\n')
-  await writeFile(join(input, 'USER.md'), 'Private profile must not be imported.\n')
+  await writeFile(join(input, 'USER.md'), 'Provided user preference: concise answers.\n')
+  await writeFile(join(input, 'MEMORY.md'), 'Private memory must not be imported.\n')
   await writeFile(join(input, 'openclaw.json'), '{"exampleSecret":"not-real"}\n')
   const imported = success(await f.service.import({ path: input }))
-  assert.equal(imported.created.length, 3)
-  assert(imported.skipped.some(item => item.file === 'USER.md'))
+  assert.equal(imported.created.length, 4)
+  assert(!imported.skipped.some(item => item.file === 'USER.md'))
+  assert(imported.skipped.some(item => item.file === 'MEMORY.md'))
+  const user = imported.created.find(item => item.slot === 'user')
+  assert.equal(user.enabled, true)
+  assert.equal(success(await f.service.read({ id: user.id })).file.body.trim(), 'Provided user preference: concise answers.')
   assert(imported.skipped.some(item => item.file === 'openclaw.json'))
   const rules = imported.created.find(item => item.slot === 'instructions')
   assert.equal(rules.enabled, false)
   for (const item of imported.created) {
     const file = success(await f.service.read({ id: item.id })).file
-    assert(!file.body.includes('Private profile'))
+    assert(!file.body.includes('Private memory'))
     assert(!file.body.includes('exampleSecret'))
   }
+})
+
+test('a directly imported USER.md is a user profile, while other Markdown stays voice', async t => {
+  const f = await fixture(t)
+  const input = join(f.workspace, 'uSeR.Md')
+  await writeFile(input, '# Supplied preferences\nPrefers plain explanations.\n')
+  const imported = success(await f.service.import({ path: input }))
+  assert.equal(imported.created[0].slot, 'user')
+  const file = success(await f.service.read({ id: imported.created[0].id })).file
+  assert.equal(file.slot, 'user')
+  assert.match(file.body, /Prefers plain explanations/)
+  assert.match(await readFile(join(f.data, `${file.id}.md`), 'utf8'), /^slot: user$/m)
+  const other = join(f.workspace, 'other.md')
+  await writeFile(other, 'Some other Markdown.\n')
+  assert.equal(success(await f.service.import({ path: other })).created[0].slot, 'voice')
 })
 
 test('Hermes YAML imports only selected personalities and disabled system instructions', async t => {
