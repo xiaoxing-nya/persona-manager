@@ -138,5 +138,6 @@ git status --short
 
 - [设计说明](<docs/persona-manager-design.md>)
 - [维护与提交约定](<CONTRIBUTING.md>)
+- [发布前检查报告](<docs/release-check.md>)
 
 作者：xiaoxing-nya `<xiaoxing_bot@luoli.my>`。许可：[MIT](<LICENSE>)。
