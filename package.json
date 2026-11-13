@@ -22,6 +22,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
+    "CONTRIBUTING.md",
+    "docs",
     "LICENSE"
   ],
   "dsh": {

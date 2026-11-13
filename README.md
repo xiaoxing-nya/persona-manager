@@ -8,7 +8,7 @@
 
 - 多个人设文件独立启用，按 `identity → voice → instructions → overlay` 的槽位顺序组合。
 - 设置页编辑名称、描述、槽位、排序、正文，支持组合预览与导入。
-- 应用后注册同名 Agent 预设，用户自行在新会话的模式选择器中选用；不修改宿主默认预设。
+- 应用后注册同名 Agent 预设，用户自行在新会话的模式选择器中选用；不切换宿主默认选中的预设。
 - 可选覆盖内置预设的人格，默认关闭；已有会话继续保留其原预设。
 - 「AI辅助」开启新的编辑会话，使用专用预设，不带已应用的用户人设；编辑结束不自动应用。
 
@@ -20,7 +20,7 @@
 dsh plugin --profile desktop add 'C:\path\to\persona-manager'
 ```
 
-安装是否即时生效以 DSH 返回结果为准；需要重启或刷新时按提示操作。仅整理 Git 历史不改变插件安装目录，也不要求重装。
+安装是否即时生效以 DSH 返回结果为准；需要重启或刷新时按提示操作。CLI 与 Desktop 的安装要求以所用 DSH 版本的说明为准。
 
 ## 配置与本机数据
 
@@ -31,7 +31,7 @@ config:
   personaDir: !!js dshHomePath('xiaoxing', 'personas')
 ```
 
-`personaDir` 为人设目录，通常解析为 `<DSH_HOME>/xiaoxing/personas`，不存在时首次文件操作创建。插件未声明 Config schema；未提供该字段时，当前入口尝试使用 `process.env.DSH_HOME`，两者均不可用则相关操作返回 `no-home`。入口未接入 `profileContext.home` 回退。
+`personaDir` 为人设目录，通常解析为 `<DSH_HOME>/xiaoxing/personas`，不存在时首次文件操作创建。插件未声明 Config schema；未提供该字段时，当前入口尝试使用 `process.env.DSH_HOME`，两者均不可用时，需要读写人设目录的操作返回 `no-home`，列表与组合等只读操作仍可返回空结果。入口未接入 `profileContext.home` 回退。
 
 该目录保存：
 
@@ -91,8 +91,8 @@ emoji: ""
 | 输入 | 行为 |
 |---|---|
 | OpenClaw 工作区（含 `SOUL.md`） | `SOUL.md` → voice；`IDENTITY.md` → identity；`AGENTS.md` → instructions，默认停用。跳过用户画像、记忆、技能与运行配置。 |
-| Hermes `SOUL.md` | voice，名称取父目录名。 |
-| Hermes profile（含 `distribution.yaml`） | 使用 name / description 和描述中的 version 信息，导入 `SOUL.md`；不保存 author 字段。 |
+| Hermes `SOUL.md` | voice，名称取文件所在目录名。 |
+| Hermes profile（含 `distribution.yaml`） | 读取 name / version / description，导入 `SOUL.md`；version 只用于缺省描述，不保存 author 字段。 |
 | Hermes YAML 配置 | `agent.personalities` → overlay；当前选择的 personality 初始启用；`agent.system_prompt` → instructions，默认停用。 |
 | 其他 Markdown | voice，名称取一级标题或文件名。 |
 
@@ -117,5 +117,8 @@ git status --short
 ```
 
 本仓库目前没有自动化行为测试。语法检查不能代替 DSH 中的安装、Remote 调用、预设生命周期与界面验证。
+
+- [设计说明](<docs/persona-manager-design.md>)
+- [维护与提交约定](<CONTRIBUTING.md>)
 
 作者：xiaoxing-nya `<xiaoxing_bot@luoli.my>`。许可：[MIT](<LICENSE>)。
