@@ -179,7 +179,9 @@ window.__ModuleLoader__.load({
       'error.navigate-failed': 'The AI session was created, but could not be opened.',
       'error.service-unavailable': 'The Host service is unavailable. Refresh after plugin reload.',
       'error.config-authority': 'A home patch or command-line overlay controls this setting. Change that source first.',
-      'error.confirmation-unavailable': 'This client cannot show a confirmation dialog. Reopen in the supported Web UI.',
+      'confirm.cancel': 'Cancel',
+      'confirm.delete': 'Confirm delete',
+      'confirm.apply': 'Continue applying',
     }
 
     /** Chinese dictionary. */
@@ -319,7 +321,9 @@ window.__ModuleLoader__.load({
       'error.navigate-failed': 'AI 会话已创建，但打开失败。',
       'error.service-unavailable': '宿主服务不可用，请在插件重新加载后刷新。',
       'error.config-authority': '该设置由 home patch 或命令行覆盖层控制，请先修改对应来源。',
-      'error.confirmation-unavailable': '当前客户端无法显示确认对话框，请在受支持的 Web 界面中重新打开。',
+      'confirm.cancel': '取消',
+      'confirm.delete': '确认删除',
+      'confirm.apply': '继续应用',
     }
 
     /** Section styles; only `--dsw-alias-*` theme tokens carry color. */
@@ -346,10 +350,17 @@ window.__ModuleLoader__.load({
 .xxp-btnPrimary:hover { background: var(--dsw-alias-button-primary-hover); }
 .xxp-btnPrimary:active { background: var(--dsw-alias-button-primary-hover); }
 .xxp-btnDanger { color: var(--dsw-alias-state-error-primary); }
+.xxp-btnDangerFill { border-color: transparent; background: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-label-primary-inverted); }
+.xxp-btnDangerFill:hover, .xxp-btnDangerFill:active { background: var(--dsw-alias-state-error-primary); opacity: 0.9; }
 .xxp-btnSmall { padding: 3px 9px; font-size: 12px; line-height: 18px; }
 .xxp-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 12px; overflow: hidden; }
-.xxp-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 0.5px solid var(--dsw-alias-border-l2); }
-.xxp-row:first-child { border-top: none; }
+.xxp-rowWrap { display: flex; flex-direction: column; border-top: 0.5px solid var(--dsw-alias-border-l2); }
+.xxp-rowWrap:first-child { border-top: none; }
+.xxp-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
+.xxp-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; border: 0.5px dashed var(--dsw-alias-border-l3); border-radius: 8px; padding: 8px 10px; background: var(--dsw-alias-bg-module-platform); }
+.xxp-confirmInline { border: 0; border-top: 0.5px dashed var(--dsw-alias-border-l3); border-radius: 0; padding: 8px 12px; }
+.xxp-confirmText { flex: 1 1 220px; min-width: 0; color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; white-space: pre-line; overflow-wrap: anywhere; }
+.xxp-confirmActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .xxp-rowMain { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
 .xxp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 20px; }
 .xxp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
@@ -424,6 +435,7 @@ window.__ModuleLoader__.load({
         const [showPreview, setShowPreview] = React.useState(false)
         const [previewText, setPreviewText] = React.useState('')
         const [aiBusy, setAiBusy] = React.useState(false)
+        const [pendingConfirm, setPendingConfirm] = React.useState(null)
 
         /** Call one Remote method and unwrap both envelopes. */
         const call = React.useCallback(async (method, request) => {
@@ -470,6 +482,7 @@ window.__ModuleLoader__.load({
           const problem = !listResult.ok ? listResult : !statusResult.ok ? statusResult : null
           if (problem !== null || options.preserveFailure !== true) setFailure(problem)
           setShowPreview(false)
+          setPendingConfirm(null)
           setBusy(false)
         }, [call])
 
@@ -478,35 +491,69 @@ window.__ModuleLoader__.load({
           return () => { refreshGeneration.current += 1 }
         }, [refresh])
 
-        const confirmAction = (message) => {
-          if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
-            setFailure({ code: 'confirmation-unavailable', message: '' })
-            return false
+        React.useEffect(() => {
+          if (pendingConfirm === null || busy) return undefined
+          if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+          const onKeyDown = (event) => {
+            if (event.key === 'Escape') setPendingConfirm(null)
           }
-          return window.confirm(message)
-        }
+          window.addEventListener('keydown', onKeyDown)
+          return () => { window.removeEventListener('keydown', onKeyDown) }
+        }, [pendingConfirm, busy])
 
         const runApply = async (options, overrideConfirmed = false) => {
           if (status?.overrideBuiltIn === true && !overrideConfirmed) {
-            if (!confirmAction(t('apply.overrideConfirm'))) return
-            overrideConfirmed = true
+            setFailure(null)
+            setPendingConfirm({
+              kind: 'apply',
+              reason: 'override',
+              options,
+              overrideConfirmed: true,
+              message: t('apply.overrideConfirm'),
+            })
+            return
           }
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
           const result = await call('apply', options)
           if (!result.ok) {
-            if (result.code === 'template-groups' && options.force !== true && confirmAction(t('apply.templateConfirm'))) {
-              return runApply({ ...options, force: true }, overrideConfirmed)
+            if (result.code === 'template-groups' && options.force !== true) {
+              setBusy(false)
+              setPendingConfirm({
+                kind: 'apply',
+                reason: 'template-groups',
+                options: { ...options, force: true },
+                overrideConfirmed,
+                message: t('apply.templateConfirm'),
+              })
+              return
             }
-            if (result.code === 'empty' && options.allowEmpty !== true && confirmAction(t('apply.emptyConfirm'))) {
-              return runApply({ ...options, allowEmpty: true }, overrideConfirmed)
+            if (result.code === 'empty' && options.allowEmpty !== true) {
+              setBusy(false)
+              setPendingConfirm({
+                kind: 'apply',
+                reason: 'empty',
+                options: { ...options, allowEmpty: true },
+                overrideConfirmed,
+                message: t('apply.emptyConfirm'),
+              })
+              return
             }
-            if (result.code === 'deployment-persona' && options.clearDeployment !== true && confirmAction(t('apply.deploymentConfirm'))) {
-              return runApply({ ...options, clearDeployment: true }, overrideConfirmed)
+            if (result.code === 'deployment-persona' && options.clearDeployment !== true) {
+              setBusy(false)
+              setPendingConfirm({
+                kind: 'apply',
+                reason: 'deployment-persona',
+                options: { ...options, clearDeployment: true },
+                overrideConfirmed,
+                message: t('apply.deploymentConfirm'),
+              })
+              return
             }
             setBusy(false)
-            setFailure(current => current?.code === 'confirmation-unavailable' ? current : result)
+            setFailure(result)
             await refresh({ preserveFailure: true })
             return
           }
@@ -537,6 +584,7 @@ window.__ModuleLoader__.load({
 
         /** Persist the shipped-preset override switch. */
         const handleOverride = async (enabled) => {
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
@@ -547,6 +595,7 @@ window.__ModuleLoader__.load({
         }
 
         const handleToggle = async (file) => {
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
@@ -556,15 +605,24 @@ window.__ModuleLoader__.load({
         }
 
         const toggleSelection = (id, checked) => {
+          setPendingConfirm(current => current?.kind === 'delete-bulk' ? null : current)
           setSelectedIds(current => checked ? (current.includes(id) ? current : [...current, id]) : current.filter(value => value !== id))
         }
 
         /** Selection is local UI state; data changes use the same Host methods as row actions. */
-        const runSelected = async (method, fields = {}) => {
+        const runSelected = async (method, fields = {}, confirmed = false) => {
           if (busy || aiBusy || listFailure !== null) return
           const selection = files.filter(file => selectedIds.includes(file.id))
           if (selection.length === 0) return
-          if (method === 'delete' && !confirmAction(t('bulk.deleteConfirm', { count: selection.length, names: selection.map(file => file.name).join('\n') }))) return
+          if (method === 'delete' && confirmed !== true) {
+            setFailure(null)
+            setPendingConfirm({
+              kind: 'delete-bulk',
+              message: t('bulk.deleteConfirm', { count: selection.length, names: selection.map(file => file.name).join('\n') }),
+            })
+            return
+          }
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
@@ -595,6 +653,7 @@ window.__ModuleLoader__.load({
         }
 
         const handleEdit = async (file) => {
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
@@ -619,6 +678,7 @@ window.__ModuleLoader__.load({
         }
 
         const handleNew = () => {
+          setPendingConfirm(null)
           setFailure(null)
           setNotice('')
           setDraft({ id: '', isNew: true, name: '', description: '', slot: 'voice', order: '100', enabled: true, body: '' })
@@ -662,8 +722,17 @@ window.__ModuleLoader__.load({
           await refresh()
         }
 
-        const handleDelete = async (file) => {
-          if (!confirmAction(t('list.removeConfirm', { name: file.name }))) return
+        const handleDelete = async (file, confirmed = false) => {
+          if (confirmed !== true) {
+            setFailure(null)
+            setPendingConfirm({
+              kind: 'delete-one',
+              id: file.id,
+              message: t('list.removeConfirm', { name: file.name }),
+            })
+            return
+          }
+          setPendingConfirm(null)
           setBusy(true)
           setFailure(null)
           setNotice('')
@@ -736,6 +805,34 @@ window.__ModuleLoader__.load({
           control,
         )
 
+        /** Non-blocking inline confirmation strip shared by apply and delete flows. */
+        const renderConfirmBar = ({ message, confirmLabel, danger = false, inline = false, onConfirm }) => h('div', {
+          className: inline ? 'xxp-confirm xxp-confirmInline' : 'xxp-confirm',
+          role: 'region',
+          'aria-label': confirmLabel,
+          onKeyDown: (event) => {
+            if (event.key !== 'Escape' || busy) return
+            event.preventDefault()
+            setPendingConfirm(null)
+          },
+        },
+          h('span', { className: 'xxp-confirmText' }, message),
+          h('div', { className: 'xxp-confirmActions' },
+            h('button', {
+              type: 'button',
+              className: 'xxp-btn xxp-btnSmall',
+              disabled: busy,
+              onClick: () => { setPendingConfirm(null) },
+            }, t('confirm.cancel')),
+            h('button', {
+              type: 'button',
+              className: danger ? 'xxp-btn xxp-btnSmall xxp-btnDangerFill' : 'xxp-btn xxp-btnSmall xxp-btnPrimary',
+              disabled: busy,
+              onClick: onConfirm,
+            }, confirmLabel),
+          ),
+        )
+
         const selectedFiles = files.filter(file => selectedIds.includes(file.id))
         const allSelected = files.length > 0 && selectedFiles.length === files.length
         const applied = status !== null && status.applied !== null && typeof status.applied === 'object' ? status.applied : null
@@ -794,6 +891,12 @@ window.__ModuleLoader__.load({
                 }, t('refresh')),
               ),
             ),
+            pendingConfirm?.kind === 'apply' ? renderConfirmBar({
+              message: pendingConfirm.message,
+              confirmLabel: t('confirm.apply'),
+              danger: pendingConfirm.reason === 'empty',
+              onConfirm: () => { void runApply(pendingConfirm.options, pendingConfirm.overrideConfirmed) },
+            }) : null,
             showPreview ? h('div', { className: 'xxp-statusPreview' },
               h('span', { className: 'xxp-statusLine' }, t('preview.compose')),
               previewText === ''
@@ -901,59 +1004,85 @@ window.__ModuleLoader__.load({
                   checked: allSelected,
                   ref: node => { if (node) node.indeterminate = selectedFiles.length > 0 && !allSelected },
                   disabled: busy || aiBusy || listFailure !== null,
-                  onChange: event => { setSelectedIds(event.target.checked ? files.map(file => file.id) : []) },
+                  onChange: event => {
+                    setPendingConfirm(current => current?.kind === 'delete-bulk' ? null : current)
+                    setSelectedIds(event.target.checked ? files.map(file => file.id) : [])
+                  },
                 }),
                 h('span', null, t('list.selectAll')),
               ),
               selectedFiles.length === 0 ? null : h('span', { className: 'xxp-aiHint' }, t('bulk.selected', { count: selectedFiles.length })),
-              selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy, onClick: () => setSelectedIds([]) }, t('bulk.clear')),
+              selectedFiles.length === 0 ? null : h('button', {
+                type: 'button',
+                className: 'xxp-btn xxp-btnSmall',
+                disabled: busy || aiBusy,
+                onClick: () => {
+                  setPendingConfirm(current => current?.kind === 'delete-bulk' ? null : current)
+                  setSelectedIds([])
+                },
+              }, t('bulk.clear')),
               selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('toggle', { enabled: true }) } }, t('bulk.enable')),
               selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('toggle', { enabled: false }) } }, t('bulk.disable')),
               selectedFiles.length === 0 ? null : h('button', { type: 'button', className: 'xxp-btn xxp-btnSmall xxp-btnDanger', disabled: busy || aiBusy || listFailure !== null, onClick: () => { void runSelected('delete') } }, t('bulk.delete')),
             ),
+            pendingConfirm?.kind === 'delete-bulk' && selectedFiles.length > 0 ? renderConfirmBar({
+              message: pendingConfirm.message,
+              confirmLabel: t('confirm.delete'),
+              danger: true,
+              onConfirm: () => { void runSelected('delete', {}, true) },
+            }) : null,
             listFailure !== null && files.length > 0 ? h('p', { className: 'xxp-warn' }, t('list.unavailable')) : null,
             files.length === 0
               ? h('p', { className: 'xxp-empty' }, busy ? t('loading') : listFailure !== null ? t('list.unavailable') : t('list.empty'))
-              : h('ul', { className: 'xxp-list' }, files.map(file => h('li', { key: file.id, className: 'xxp-row' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: selectedIds.includes(file.id),
-                  'aria-label': t('list.select', { name: file.name }),
-                  style: { margin: 0 },
-                  disabled: busy || aiBusy || listFailure !== null,
-                  onChange: event => { toggleSelection(file.id, event.target.checked) },
-                }),
-                h('button', {
-                  type: 'button',
-                  role: 'switch',
-                  'aria-checked': file.enabled === true,
-                  'aria-label': t('list.toggle', { name: file.name }),
-                  className: 'xxp-switch',
-                  disabled: busy,
-                  onClick: () => { void handleToggle(file) },
-                }, h('span', { className: 'xxp-switchThumb', 'aria-hidden': true })),
-                h('div', { className: 'xxp-rowMain' },
-                  h('div', { className: 'xxp-name' }, file.emoji ? `${file.emoji} ${file.name}` : file.name),
-                  h('div', { className: 'xxp-meta' },
-                    h('span', { className: 'xxp-badge xxp-badgeSlot' }, t(`list.slot.${file.slot}`)),
-                    h('span', { className: 'xxp-badge' }, t(`list.source.${file.sourceFormat}`)),
-                    file.description === '' ? null : h('span', { className: 'xxp-desc' }, file.description),
+              : h('ul', { className: 'xxp-list' }, files.map(file => h('li', { key: file.id, className: 'xxp-rowWrap' },
+                h('div', { className: 'xxp-row' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: selectedIds.includes(file.id),
+                    'aria-label': t('list.select', { name: file.name }),
+                    style: { margin: 0 },
+                    disabled: busy || aiBusy || listFailure !== null,
+                    onChange: event => { toggleSelection(file.id, event.target.checked) },
+                  }),
+                  h('button', {
+                    type: 'button',
+                    role: 'switch',
+                    'aria-checked': file.enabled === true,
+                    'aria-label': t('list.toggle', { name: file.name }),
+                    className: 'xxp-switch',
+                    disabled: busy,
+                    onClick: () => { void handleToggle(file) },
+                  }, h('span', { className: 'xxp-switchThumb', 'aria-hidden': true })),
+                  h('div', { className: 'xxp-rowMain' },
+                    h('div', { className: 'xxp-name' }, file.emoji ? `${file.emoji} ${file.name}` : file.name),
+                    h('div', { className: 'xxp-meta' },
+                      h('span', { className: 'xxp-badge xxp-badgeSlot' }, t(`list.slot.${file.slot}`)),
+                      h('span', { className: 'xxp-badge' }, t(`list.source.${file.sourceFormat}`)),
+                      file.description === '' ? null : h('span', { className: 'xxp-desc' }, file.description),
+                    ),
+                  ),
+                  h('div', { className: 'xxp-actions' },
+                    h('button', {
+                      type: 'button',
+                      className: 'xxp-btn xxp-btnSmall',
+                      disabled: busy,
+                      onClick: () => { void handleEdit(file) },
+                    }, t('list.edit')),
+                    h('button', {
+                      type: 'button',
+                      className: 'xxp-btn xxp-btnSmall xxp-btnDanger',
+                      disabled: busy,
+                      onClick: () => { void handleDelete(file) },
+                    }, t('list.remove')),
                   ),
                 ),
-                h('div', { className: 'xxp-actions' },
-                  h('button', {
-                    type: 'button',
-                    className: 'xxp-btn xxp-btnSmall',
-                    disabled: busy,
-                    onClick: () => { void handleEdit(file) },
-                  }, t('list.edit')),
-                  h('button', {
-                    type: 'button',
-                    className: 'xxp-btn xxp-btnSmall xxp-btnDanger',
-                    disabled: busy,
-                    onClick: () => { void handleDelete(file) },
-                  }, t('list.remove')),
-                ),
+                pendingConfirm?.kind === 'delete-one' && pendingConfirm.id === file.id ? renderConfirmBar({
+                  message: pendingConfirm.message,
+                  confirmLabel: t('confirm.delete'),
+                  danger: true,
+                  inline: true,
+                  onConfirm: () => { void handleDelete(file, true) },
+                }) : null,
               ))),
           ),
 

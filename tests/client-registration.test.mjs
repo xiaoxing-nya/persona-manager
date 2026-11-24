@@ -134,23 +134,40 @@ test('USER.md has localized profile controls and new AI drafts carry their categ
 })
 
 
-test('multi-selection has localized select-all and batch actions with deletion confirmation', async () => {
+test('multi-selection has localized select-all and batch actions with inline deletion confirmation', async () => {
   const client = makeClient()
   await client.plugin.apply(client.ctx)
   const dictionaries = client.locales.get('xiaoxing-persona')
   for (const language of ['en', 'zh']) {
-    for (const key of ['list.select', 'list.selectAll', 'bulk.selected', 'bulk.clear', 'bulk.enable', 'bulk.disable', 'bulk.delete', 'bulk.enabled', 'bulk.disabled', 'bulk.deleted', 'bulk.failed', 'bulk.deleteConfirm']) {
+    for (const key of ['list.select', 'list.selectAll', 'bulk.selected', 'bulk.clear', 'bulk.enable', 'bulk.disable', 'bulk.delete', 'bulk.enabled', 'bulk.disabled', 'bulk.deleted', 'bulk.failed', 'bulk.deleteConfirm', 'confirm.cancel', 'confirm.delete', 'confirm.apply']) {
       assert.equal(typeof dictionaries[language][key], 'string', `${language}:${key}`)
     }
   }
   assert.match(source, /checked: selectedIds\.includes\(file\.id\)/)
   assert.match(source, /pruneSelection\(current, nextFiles\)/)
-  assert.match(source, /method === 'delete' && !confirmAction\(t\('bulk\.deleteConfirm'/)
+  assert.match(source, /method === 'delete' && confirmed !== true/)
+  assert.match(source, /kind: 'delete-bulk'/)
   assert.match(source, /runSelected\('toggle', \{ enabled: true \}\)/)
   assert.match(source, /runSelected\('toggle', \{ enabled: false \}\)/)
   assert.match(source, /runSelected\('delete'\)/)
+  assert.match(source, /runSelected\('delete', \{\}, true\)/)
   assert.match(source, /setSelectedIds\(failures\.map/)
   assert.equal(client.descriptors.descriptors.length, 11, 'batch actions reuse existing Host endpoints')
+  client.dispose()
+})
+
+test('all delete and apply confirmations stay inline and never call window.confirm', async () => {
+  const client = makeClient()
+  await client.plugin.apply(client.ctx)
+  assert.equal(source.includes('window.confirm'), false, 'blocking browser confirm dialogs are forbidden')
+  assert.doesNotMatch(source, /\bconfirmAction\b/, 'legacy confirmAction wrapper is removed')
+  assert.match(source, /pendingConfirm\?\.kind === 'apply'/)
+  assert.match(source, /pendingConfirm\?\.kind === 'delete-bulk'/)
+  assert.match(source, /pendingConfirm\?\.kind === 'delete-one' && pendingConfirm\.id === file\.id/)
+  for (const reason of ['override', 'template-groups', 'empty', 'deployment-persona']) {
+    assert.match(source, new RegExp(`reason: '${reason}'`), `apply inline confirm covers ${reason}`)
+  }
+  assert.match(source, /event\.key === 'Escape'|event\.key !== 'Escape'/)
   client.dispose()
 })
 

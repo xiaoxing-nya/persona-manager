@@ -14,7 +14,8 @@ assert.equal(manifest.private, true, 'Publishing stays disabled until explicitly
 assert.equal(manifest.dsh.manifestVersion, 1)
 assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
 assert.equal(manifest.dsh.client.platform, 'web')
-assert(manifest.engines.node && manifest.engines.dsh)
+assert.equal(manifest.engines.node, '>=24.9.0', 'Node engine floor must match DSH host >=24.9.0')
+assert(manifest.engines.dsh)
 
 const required = ['index.js', 'client.js', 'cordis.patch.yml', 'icon.svg', 'README.md', 'LICENSE', 'CONTRIBUTING.md',
   'defaults/basic.md', 'docs/persona-manager-design.md', 'locale/en.json', 'locale/zh.json']

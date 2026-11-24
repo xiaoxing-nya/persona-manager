@@ -6,7 +6,7 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=24.9.0",
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "keywords": ["dsh", "deepseek-harness", "persona", "agent-preset", "xiaoxing"],
